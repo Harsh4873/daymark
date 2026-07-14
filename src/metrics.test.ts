@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fromDateKey } from './dates';
 import {
   getDayContributionRatio,
@@ -12,6 +12,8 @@ import type { Habit, HabitEntry, TrackerState } from './model';
 import { parseTrackerState } from './store';
 
 const timestamp = '2026-07-01T12:00:00.000Z';
+
+afterEach(() => vi.useRealTimers());
 
 function habit(overrides: Partial<Habit> = {}): Habit {
   return {
@@ -171,6 +173,8 @@ describe('goal progress', () => {
 
 describe('period-aware streaks', () => {
   it('ignores unscheduled weekend days for a weekday habit', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-13'));
     const testHabit = habit({ target: 1, schedule: { type: 'selectedDays', days: [1, 2, 3, 4, 5] }, startDate: '2026-07-06' });
     const state = tracker(testHabit, {
       '2026-07-06': { [testHabit.id]: entry(1) },
