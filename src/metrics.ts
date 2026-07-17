@@ -138,6 +138,14 @@ export function getHabitPeriodProgress(
   };
 }
 
+/** True when nothing more is asked of this habit on this day: skipped, checked, or period goal met. */
+export function isHabitHandledOn(habit: Habit, date: Date, state: TrackerState) {
+  const entry = getEntry(state, habit.id, date);
+  if (entry?.skipped) return true;
+  if (habit.metric === 'check' && habit.period === 'day') return Boolean(entry && entry.value > 0);
+  return getHabitPeriodProgress(habit, date, state).complete;
+}
+
 export function getDayContributionRatio(habit: Habit, date: Date, state: TrackerState) {
   if (!isHabitScheduledOn(habit, date)) return null;
   const entry = getEntry(state, habit.id, date);
@@ -324,4 +332,47 @@ export function getIntensityLevel(ratio: number) {
   if (ratio < 0.7) return 2;
   if (ratio < 1) return 3;
   return 4;
+}
+
+/**
+ * Habit strength, adapted from Loop Habit Tracker's exponentially smoothed
+ * score: each resolved goal period pulls the score toward that period's
+ * completion ratio, so misses fade strength gradually instead of resetting
+ * it — roughly half the strength is lost after 13 straight misses.
+ * Skipped periods and the still-open current period leave the score untouched.
+ */
+export function getHabitStrength(habit: Habit, state: TrackerState, endDate = new Date()): number {
+  const checkpoints = getHabitCheckpoints(habit, state, endDate);
+  if (!checkpoints.length) return 0;
+  const actualPeriod = getPeriodBounds(habit.period, endDate, state.profile.weekStartsOn);
+  const latest = checkpoints[checkpoints.length - 1];
+  const latestPeriodIsOpen = Boolean(
+    latest
+    && isHabitActiveOn(habit, endDate)
+    && toDateKey(latest) === toDateKey(actualPeriod.start),
+  );
+  const multiplier = Math.pow(0.5, 1 / 13);
+  let score = 0;
+  checkpoints.forEach((checkpoint, index) => {
+    const outcome = getHabitPeriodProgress(habit, checkpoint, state);
+    if (outcome.skipped) return;
+    if (index === checkpoints.length - 1 && latestPeriodIsOpen && !outcome.hasEntry) return;
+    score = score * multiplier + clamp(outcome.ratio) * (1 - multiplier);
+  });
+  return score;
+}
+
+export const STREAK_MILESTONES = [7, 14, 30, 60, 100, 180, 365];
+
+export function reachedMilestone(streak: number) {
+  let reached = 0;
+  for (const milestone of STREAK_MILESTONES) {
+    if (streak >= milestone) reached = milestone;
+    else break;
+  }
+  return reached;
+}
+
+export function nextMilestone(streak: number) {
+  return STREAK_MILESTONES.find((milestone) => milestone > streak) ?? null;
 }

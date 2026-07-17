@@ -1,4 +1,3 @@
-import { ArrowDownRight, ArrowUpRight, CalendarDays, Flame, MousePointer2 } from 'lucide-react';
 import { addDays, formatDateRange, getWeekDays, isAfterDate, isSameDate, startOfWeek, toDateKey } from '../dates';
 import {
   formatValue,
@@ -11,7 +10,7 @@ import {
   isHabitScheduledOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, SectionHeading, habitStyle } from '../ui';
+import { DateSwitcher, HabitBadge, ProgressBar, ViewHeader, habitStyle } from '../ui';
 import { useSwipeNavigation } from '../useSwipe';
 
 interface WeekViewProps {
@@ -20,6 +19,7 @@ interface WeekViewProps {
   date: Date;
   setDate: (date: Date) => void;
   openDay: (date: Date) => void;
+  openHabitDetail: (habit: Habit) => void;
 }
 
 function weekResult(habit: Habit, days: Date[], state: TrackerState) {
@@ -72,7 +72,7 @@ function averageWeekScore(state: TrackerState, habits: Habit[], days: Date[]) {
   return elapsed.reduce((sum, snapshot) => sum + snapshot.score, 0) / elapsed.length;
 }
 
-export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProps) {
+export function WeekView({ state, habits, date, setDate, openDay, openHabitDetail }: WeekViewProps) {
   const weekDays = getWeekDays(date, state.profile.weekStartsOn);
   const visibleHabits = habits.filter((habit) => weekDays.some((day) => isHabitActiveOn(habit, day)));
   const previousDays = weekDays.map((day) => addDays(day, -7));
@@ -81,54 +81,79 @@ export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProp
   const change = score - previousScore;
   const daySnapshots = weekDays.map((day) => ({ day, snapshot: getDaySnapshot(state, day, visibleHabits) }));
   const elapsedSnapshots = daySnapshots.filter(({ day }) => !isAfterDate(day, new Date()));
-  const strongest = [...elapsedSnapshots].sort((left, right) => right.snapshot.score - left.snapshot.score)[0];
   const activeDays = elapsedSnapshots.filter(({ snapshot }) => snapshot.logged > 0).length;
   const periodStart = startOfWeek(new Date(), state.profile.weekStartsOn);
   const currentWeek = isSameDate(weekDays[0], periodStart);
+  const habitResults = visibleHabits.map((habit) => ({ habit, result: weekResult(habit, weekDays, state) }));
+  const goalsMet = habitResults.reduce((sum, item) => sum + item.result.completed, 0);
+  const goalsDue = habitResults.reduce((sum, item) => sum + item.result.due, 0);
+  const scoredDays = elapsedSnapshots.filter(({ snapshot }) => snapshot.scheduled > 0);
+  const bestDay = [...scoredDays].sort((left, right) => right.snapshot.score - left.snapshot.score)[0];
+  const weakestDay = [...scoredDays].sort((left, right) => left.snapshot.score - right.snapshot.score)[0];
+  const rankedHabits = habitResults.filter((item) => item.result.due > 0).sort((left, right) => right.result.ratio - left.result.ratio);
+  const topHabit = rankedHabits[0];
+  const focusHabit = rankedHabits.length > 1 ? rankedHabits[rankedHabits.length - 1] : undefined;
   const swipe = useSwipeNavigation(
     () => setDate(addDays(date, -7)),
     currentWeek ? undefined : () => setDate(addDays(date, 7)),
   );
 
+  function dayLabel(item?: { day: Date; snapshot: { score: number } }) {
+    if (!item) return '—';
+    return `${item.day.toLocaleDateString('en-US', { weekday: 'short' })} · ${Math.round(item.snapshot.score * 100)}%`;
+  }
+
   return (
     <div className="view-shell review-view week-view" {...swipe}>
-      <SectionHeading
-        eyebrow="Weekly review"
-        title="See the rhythm, not just the streak."
-        copy="Daily goals show adherence across the week. Flexible goals keep their real weekly or monthly target."
-      />
-
-      <DateSwitcher
-        eyebrow="Seven-day window"
-        label={formatDateRange(weekDays[0], weekDays[6])}
-        onPrevious={() => setDate(addDays(date, -7))}
-        onNext={() => setDate(addDays(date, 7))}
-        nextDisabled={currentWeek}
-        onToday={currentWeek ? undefined : () => setDate(new Date())}
-      />
-
-      <section className="metric-grid metric-grid-four" aria-label="Weekly summary">
-        <MetricCard label="Week score" value={`${Math.round(score * 100)}%`} detail="normalized across unlike units" accent />
-        <MetricCard label="Active days" value={`${activeDays}/7`} detail="days with at least one log" />
-        <MetricCard
-          label="Change"
-          value={`${change >= 0 ? '+' : ''}${Math.round(change * 100)} pts`}
-          detail="versus the previous week"
+      <ViewHeader
+        title="Week"
+        sub={`${goalsMet}/${goalsDue} goals met · ${activeDays}/7 active days`}
+      >
+        <DateSwitcher
+          compact
+          eyebrow="Seven-day window"
+          label={formatDateRange(weekDays[0], weekDays[6])}
+          onPrevious={() => setDate(addDays(date, -7))}
+          onNext={() => setDate(addDays(date, 7))}
+          nextDisabled={currentWeek}
+          onToday={currentWeek ? undefined : () => setDate(new Date())}
         />
-        <MetricCard
-          label="Strongest day"
-          value={strongest ? strongest.day.toLocaleDateString('en-US', { weekday: 'long' }) : '—'}
-          detail={strongest ? `${Math.round(strongest.snapshot.score * 100)}% day score` : 'start logging to reveal it'}
-        />
+      </ViewHeader>
+
+      <section className="panel week-recap" aria-label="Week recap">
+        <div className="recap-item recap-accent">
+          <span>Week score</span>
+          <strong>{Math.round(score * 100)}%</strong>
+          <small className={change >= 0 ? 'delta-up' : 'delta-down'}>
+            {change >= 0 ? '+' : ''}{Math.round(change * 100)} vs last week
+          </small>
+        </div>
+        <div className="recap-item">
+          <span>Best day</span>
+          <strong>{dayLabel(bestDay)}</strong>
+        </div>
+        <div className="recap-item">
+          <span>Weakest day</span>
+          <strong>{dayLabel(scoredDays.length > 1 ? weakestDay : undefined)}</strong>
+        </div>
+        <div className="recap-item">
+          <span>Top habit</span>
+          <strong>{topHabit ? topHabit.habit.name : '—'}</strong>
+          {topHabit && <small>{Math.round(topHabit.result.ratio * 100)}%</small>}
+        </div>
+        <div className="recap-item">
+          <span>Needs focus</span>
+          <strong>{focusHabit && focusHabit.result.ratio < 1 ? focusHabit.habit.name : '—'}</strong>
+          {focusHabit && focusHabit.result.ratio < 1 && <small>{Math.round(focusHabit.result.ratio * 100)}%</small>}
+        </div>
       </section>
 
       <section className="panel week-matrix-panel">
-        <div className="panel-heading">
+        <div className="panel-heading compact">
           <div>
-            <span>Habit × day</span>
-            <h2>Your week at a glance</h2>
+            <span>Grid</span>
+            <h2>Habit × day</h2>
           </div>
-          <p><MousePointer2 aria-hidden="true" /> Select any cell to edit that day.</p>
         </div>
 
         <div className="week-matrix-scroll">
@@ -151,10 +176,15 @@ export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProp
               const result = weekResult(habit, weekDays, state);
               return (
                 <div className="matrix-row-contents" key={habit.id} style={habitStyle(habit)}>
-                  <div className="matrix-habit">
+                  <button
+                    type="button"
+                    className="matrix-habit"
+                    onClick={() => openHabitDetail(habit)}
+                    aria-label={`Open ${habit.name} history`}
+                  >
                     <HabitBadge habit={habit} />
                     <span><strong>{habit.name}</strong><small>{habit.category}</small></span>
-                  </div>
+                  </button>
                   {weekDays.map((day) => {
                     const ratio = getDayContributionRatio(habit, day, state);
                     const entry = getEntry(state, habit.id, day);
@@ -191,24 +221,6 @@ export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProp
         </div>
       </section>
 
-      <section className="weekly-readout-grid">
-        <article className="panel signal-card">
-          <span className="signal-icon"><Flame aria-hidden="true" /></span>
-          <div>
-            <span>Momentum signal</span>
-            <h3>{score >= 0.8 ? 'The routine is carrying itself.' : score >= 0.5 ? 'The week has a pulse.' : 'Build one repeatable anchor.'}</h3>
-            <p>{score >= 0.8 ? 'Protect what is already working.' : 'A modest repeatable action is more useful than a heroic catch-up day.'}</p>
-          </div>
-        </article>
-        <article className="panel signal-card">
-          <span className="signal-icon signal-icon-alt">{change >= 0 ? <ArrowUpRight aria-hidden="true" /> : <ArrowDownRight aria-hidden="true" />}</span>
-          <div>
-            <span>Week over week</span>
-            <h3>{change >= 0 ? 'Consistency is moving up.' : 'The signal softened a little.'}</h3>
-            <p>{previousScore === 0 ? 'The prior week has no signal yet.' : `${Math.abs(Math.round(change * 100))} percentage points ${change >= 0 ? 'ahead of' : 'behind'} the prior week.`}</p>
-          </div>
-        </article>
-      </section>
     </div>
   );
 }

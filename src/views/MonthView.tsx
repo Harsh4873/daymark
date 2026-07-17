@@ -1,4 +1,4 @@
-import { CalendarCheck2, CircleDot, Layers3 } from 'lucide-react';
+import { Layers3 } from 'lucide-react';
 import {
   addMonths,
   daysBetween,
@@ -19,7 +19,7 @@ import {
   isHabitScheduledOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, SectionHeading, habitStyle } from '../ui';
+import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, ViewHeader, habitStyle } from '../ui';
 import { useSwipeNavigation } from '../useSwipe';
 
 interface MonthViewProps {
@@ -84,20 +84,20 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
 
   return (
     <div className="view-shell review-view month-view" {...swipe}>
-      <SectionHeading
-        eyebrow="Monthly review"
-        title="Patterns become visible at this distance."
-        copy="The calendar blends unlike habits into a normalized day score, while the side panels keep each goal honest."
-      />
-
-      <DateSwitcher
-        eyebrow="Calendar month"
-        label={formatMonthYear(date)}
-        onPrevious={() => setDate(addMonths(date, -1))}
-        onNext={() => setDate(addMonths(date, 1))}
-        nextDisabled={currentMonth}
-        onToday={currentMonth ? undefined : () => setDate(new Date())}
-      />
+      <ViewHeader
+        title="Month"
+        sub={`${activeDays} active of ${actualDays.length} elapsed days · ${totalLogs} check-ins`}
+      >
+        <DateSwitcher
+          compact
+          eyebrow="Calendar month"
+          label={formatMonthYear(date)}
+          onPrevious={() => setDate(addMonths(date, -1))}
+          onNext={() => setDate(addMonths(date, 1))}
+          nextDisabled={currentMonth}
+          onToday={currentMonth ? undefined : () => setDate(new Date())}
+        />
+      </ViewHeader>
 
       <section className="metric-grid metric-grid-four" aria-label="Monthly summary">
         <MetricCard label="Month score" value={`${Math.round(monthScore * 100)}%`} detail="average normalized day" accent />
@@ -108,9 +108,8 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
 
       <div className="month-layout">
         <section className="panel month-calendar-panel">
-          <div className="panel-heading">
-            <div><span>Day score calendar</span><h2>{formatMonthYear(date)}</h2></div>
-            <p><CalendarCheck2 aria-hidden="true" /> Select a day to review or backfill.</p>
+          <div className="panel-heading compact">
+            <div><span>Day scores</span><h2>{formatMonthYear(date)}</h2></div>
           </div>
 
           <div className="month-week-labels" aria-hidden="true">
@@ -147,7 +146,7 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
         <aside className="month-side-stack">
           <section className="panel category-panel">
             <div className="panel-heading compact">
-              <div><span>Category balance</span><h2>Where the energy went</h2></div>
+              <div><span>Categories</span><h2>Category balance</h2></div>
               <Layers3 aria-hidden="true" />
             </div>
             <div className="category-list">
@@ -161,19 +160,12 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
             </div>
           </section>
 
-          <section className="panel month-note-card">
-            <CircleDot aria-hidden="true" />
-            <span>Read the quiet days, too</span>
-            <h3>Blank is not the same as failed.</h3>
-            <p>Future days, rest days, skipped goals, and days with no entry remain distinct in the record.</p>
-          </section>
         </aside>
       </div>
 
       <section className="panel habit-month-panel">
-        <div className="panel-heading">
+        <div className="panel-heading compact">
           <div><span>Goal review</span><h2>Habit by habit</h2></div>
-          <p>Completion is judged in each habit’s real goal period.</p>
         </div>
         <div className="habit-month-list">
           {visibleHabits.map((habit) => {

@@ -9,6 +9,8 @@ Daymark is the private, local-first habit app published at `harsh.bet/daymark/`.
 - Reach-at-least and stay-at-or-below goals
 - Daily, selected-day, interval, weekly, and monthly rhythms
 - Period-aware streaks, consistency scores, skips, notes, pause history, and normalized heatmaps
+- Per-habit detail view: Loop-style exponentially smoothed strength score, current/best streaks, quiet milestone markers (7/14/30/60/100/180/365), a per-habit year heatmap, weekday pattern bars, and recent notes
+- Compact one-tap check-in rows grouped by time of day, with a collapsing Done group and an app-icon badge (where supported) counting habits still due
 - Mirrored IndexedDB/localStorage persistence with lossless JSON backup and CSV export
 - Automatic phone/laptop sync through the existing `pickledgerpro` Firebase project
 - Offline check-ins that queue locally and reconcile after reconnecting

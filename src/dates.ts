@@ -75,6 +75,32 @@ export function getRollingHeatmapDays(anchor: Date, weekStartsOn: 0 | 1) {
   return daysBetween(start, end);
 }
 
+export interface MonthGroup {
+  key: string;
+  label: string;
+  days: Array<Date | null>;
+}
+
+/** Groups a contiguous day range into per-month rows of 31 day slots. */
+export function groupDaysByMonth(days: Date[]): MonthGroup[] {
+  const rows: MonthGroup[] = [];
+  days.forEach((day) => {
+    const key = `${day.getFullYear()}-${day.getMonth()}`;
+    let row = rows[rows.length - 1];
+    if (!row || row.key !== key) {
+      const yearMark = !rows.length || day.getMonth() === 0;
+      row = {
+        key,
+        label: day.toLocaleDateString('en-US', { month: 'short' }) + (yearMark ? ` ’${String(day.getFullYear()).slice(2)}` : ''),
+        days: Array.from({ length: 31 }, () => null),
+      };
+      rows.push(row);
+    }
+    row.days[day.getDate() - 1] = day;
+  });
+  return rows;
+}
+
 export function isSameDate(left: Date, right: Date) {
   return toDateKey(left) === toDateKey(right);
 }

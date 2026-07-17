@@ -1,4 +1,4 @@
-import { Award, CalendarRange, ChevronLeft, ChevronRight, Flame, Info, Sparkles } from 'lucide-react';
+import { CalendarRange, ChevronLeft, ChevronRight, Flame, Info } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
   addDays,
@@ -7,6 +7,7 @@ import {
   formatDateRange,
   fromDateKey,
   getRollingHeatmapDays,
+  groupDaysByMonth,
   isAfterDate,
   isSameDate,
   toDateKey,
@@ -20,7 +21,7 @@ import {
   isHabitActiveOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { EmptyState, HabitBadge, MetricCard, SectionHeading, habitStyle } from '../ui';
+import { EmptyState, HabitBadge, MetricCard, ViewHeader, habitStyle } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
 import { useSwipeNavigation } from '../useSwipe';
 
@@ -32,15 +33,10 @@ interface YearViewProps {
   date: Date;
   setDate: (date: Date) => void;
   openDay: (date: Date) => void;
+  openHabitDetail: (habit: Habit) => void;
 }
 
-interface MonthRow {
-  key: string;
-  label: string;
-  days: Array<Date | null>;
-}
-
-export function YearView({ state, habits, date, setDate, openDay }: YearViewProps) {
+export function YearView({ state, habits, date, setDate, openDay, openHabitDetail }: YearViewProps) {
   const [filter, setFilter] = useState('all');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const heatmapScroll = useRef<HTMLDivElement>(null);
@@ -50,24 +46,7 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
     [date, state.profile.weekStartsOn],
   );
   const weeks = Array.from({ length: 53 }, (_, index) => days.slice(index * 7, index * 7 + 7));
-  const monthRows = useMemo(() => {
-    const rows: MonthRow[] = [];
-    days.forEach((day) => {
-      const key = `${day.getFullYear()}-${day.getMonth()}`;
-      let row = rows[rows.length - 1];
-      if (!row || row.key !== key) {
-        const yearMark = !rows.length || day.getMonth() === 0;
-        row = {
-          key,
-          label: day.toLocaleDateString('en-US', { month: 'short' }) + (yearMark ? ` ’${String(day.getFullYear()).slice(2)}` : ''),
-          days: Array.from({ length: 31 }, () => null),
-        };
-        rows.push(row);
-      }
-      row.days[day.getDate() - 1] = day;
-    });
-    return rows;
-  }, [days]);
+  const monthRows = useMemo(() => groupDaysByMonth(days), [days]);
   const historicalHabits = habits.filter((habit) => days.some((day) => isHabitActiveOn(habit, day)));
   const categories = [...new Set(historicalHabits.map((habit) => habit.category))];
   const filteredHabits = filter === 'all'
@@ -172,10 +151,9 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
 
   return (
     <div className="view-shell review-view year-view" {...swipe}>
-      <SectionHeading
-        eyebrow="Twelve-month review"
-        title="Your life, rendered as evidence."
-        copy="Each square normalizes the habits scheduled that day, so steps, minutes, reps, and checkmarks remain comparable."
+      <ViewHeader
+        title="Year"
+        sub={`${activeDays} active days · ${perfectDays} perfect`}
       />
 
       <div className="year-toolbar">
@@ -311,11 +289,7 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
 
         <div className="heatmap-caption">
           <Info aria-hidden="true" />
-          <p>
-            {compact
-              ? 'Each row is a month. Tap a square for its day record, then use “Open day” to edit it. Skips never count as failures.'
-              : 'Click a square for its day record. Use arrow keys to move, Enter to open the day, or double-click with a pointer. Skips never count as failures.'}
-          </p>
+          <p>{compact ? 'One row per month. Tap a square to inspect it.' : 'Click a square to inspect it; double-click or press Enter to open the day.'}</p>
         </div>
       </section>
 
@@ -347,7 +321,7 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
               })}
             </div>
           ) : (
-            <p className="no-day-entries">No entries for this lens. Blank remains different from missed.</p>
+            <p className="no-day-entries">No entries for this day.</p>
           )}
         </section>
 
@@ -361,22 +335,17 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
               .sort((left, right) => right.stats.consistency - left.stats.consistency)
               .slice(0, 5)
               .map(({ habit, stats }, index) => (
-                <article key={habit.id} style={habitStyle(habit)}>
+                <button type="button" key={habit.id} style={habitStyle(habit)} onClick={() => openHabitDetail(habit)} aria-label={`Open ${habit.name} history`}>
                   <span className="streak-rank">{String(index + 1).padStart(2, '0')}</span>
                   <HabitBadge habit={habit} />
                   <div><strong>{habit.name}</strong><small>{Math.round(stats.consistency * 100)}% consistency</small></div>
                   <span className="streak-value"><strong>{stats.currentStreak}</strong><small>current</small></span>
-                </article>
+                </button>
               ))}
           </div>
-          <div className="streak-note"><Award aria-hidden="true" /><span>A missed day can end a streak, but it cannot erase the consistency already built.</span></div>
         </section>
       </div>
 
-      <section className="year-closer">
-        <Sparkles aria-hidden="true" />
-        <p><strong>{activeDays ? `${activeDays} active days leave a real trail.` : 'The first square starts the trail.'}</strong> The goal is not a flawless wall of green; it is a record honest enough to learn from.</p>
-      </section>
     </div>
   );
 }

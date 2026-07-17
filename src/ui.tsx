@@ -1,8 +1,78 @@
 import { ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
+import type { CSSProperties, ReactNode, RefObject } from 'react';
 import type { Habit } from './model';
-import { formatNumber, goalLabel } from './metrics';
 import { HabitGlyph } from './icons';
+
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Shared modal behavior: inerts the app shell, locks body scroll, traps Tab,
+ * closes on Escape, and restores focus to the opener on unmount.
+ */
+export function useModalDialog(
+  dialogRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+  initialFocusRef?: RefObject<HTMLElement | null>,
+) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const initialFocusRefRef = useRef(initialFocusRef);
+  initialFocusRefRef.current = initialFocusRef;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const background = document.querySelector<HTMLElement>('.app-shell');
+    const previousAriaHidden = background ? background.getAttribute('aria-hidden') : null;
+    const previousOverflow = document.body.style.overflow;
+    if (background) {
+      background.inert = true;
+      background.setAttribute('aria-hidden', 'true');
+    }
+    document.body.style.overflow = 'hidden';
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = initialFocusRefRef.current?.current
+        ?? dialogRef.current?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+        ?? dialogRef.current;
+      target?.focus();
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('keydown', handleKeyDown);
+      if (background) {
+        background.inert = false;
+        if (previousAriaHidden === null) background.removeAttribute('aria-hidden');
+        else background.setAttribute('aria-hidden', previousAriaHidden);
+      }
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+}
 
 type HabitStyle = CSSProperties & { '--habit-color': string };
 type ProgressStyle = CSSProperties & { '--progress': string };
@@ -33,8 +103,16 @@ export function HabitBadge({ habit }: { habit: Habit }) {
   );
 }
 
-export function GoalLabel({ habit }: { habit: Habit }) {
-  return <span className="goal-label">{goalLabel(habit)}</span>;
+export function ViewHeader({ title, sub, children }: { title: string; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <header className="view-header">
+      <div className="view-header-copy">
+        <h1 tabIndex={-1}>{title}</h1>
+        {sub && <span className="view-header-sub">{sub}</span>}
+      </div>
+      {children && <div className="view-header-tools">{children}</div>}
+    </header>
+  );
 }
 
 export function DateSwitcher({
@@ -44,6 +122,7 @@ export function DateSwitcher({
   onNext,
   nextDisabled,
   onToday,
+  compact = false,
 }: {
   eyebrow: string;
   label: string;
@@ -51,11 +130,12 @@ export function DateSwitcher({
   onNext: () => void;
   nextDisabled?: boolean;
   onToday?: () => void;
+  compact?: boolean;
 }) {
   return (
-    <div className="date-switcher">
+    <div className={compact ? 'date-switcher date-switcher-compact' : 'date-switcher'}>
       <div>
-        <span>{eyebrow}</span>
+        {!compact && <span>{eyebrow}</span>}
         <strong>{label}</strong>
       </div>
       <div className="date-switcher-actions">
@@ -86,23 +166,6 @@ export function MetricCard({ label, value, detail, accent = false }: { label: st
   );
 }
 
-export function SectionHeading({ eyebrow, title, copy, action }: { eyebrow: string; title: string; copy?: string; action?: ReactNode }) {
-  return (
-    <div className="section-heading">
-      <div>
-        <span>{eyebrow}</span>
-        <h1 tabIndex={-1}>{title}</h1>
-        {copy && <p>{copy}</p>}
-      </div>
-      {action}
-    </div>
-  );
-}
-
-export function formatPercent(value: number) {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
-
 export function ProgressBar({ value, color, label }: { value: number; color?: string; label?: string }) {
   const safe = Math.max(0, Math.min(1, value));
   return (
@@ -130,11 +193,3 @@ export function EmptyState({ icon, title, copy, action }: { icon: ReactNode; tit
   );
 }
 
-export function ValuePair({ value, unit }: { value: number; unit: string }) {
-  return (
-    <span className="value-pair">
-      <strong>{formatNumber(value)}</strong>
-      <small>{unit}</small>
-    </span>
-  );
-}

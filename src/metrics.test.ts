@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fromDateKey } from './dates';
+import { addDays, fromDateKey, toDateKey } from './dates';
 import {
   getDayContributionRatio,
   getDaySnapshot,
   getHabitPeriodProgress,
   getHabitStats,
+  getHabitStrength,
   isHabitActiveOn,
   isHabitScheduledOn,
+  nextMilestone,
+  reachedMilestone,
 } from './metrics';
 import type { Habit, HabitEntry, TrackerState } from './model';
 import { parseTrackerState } from './store';
@@ -267,6 +270,37 @@ describe('period-aware streaks', () => {
     expect(stats.currentStreak).toBe(1);
     expect(stats.bestStreak).toBe(1);
     expect(stats.periods).toBe(1);
+  });
+});
+
+describe('milestones and habit strength', () => {
+  it('maps streaks to the highest reached milestone', () => {
+    expect(reachedMilestone(0)).toBe(0);
+    expect(reachedMilestone(6)).toBe(0);
+    expect(reachedMilestone(7)).toBe(7);
+    expect(reachedMilestone(29)).toBe(14);
+    expect(reachedMilestone(400)).toBe(365);
+    expect(nextMilestone(0)).toBe(7);
+    expect(nextMilestone(7)).toBe(14);
+    expect(nextMilestone(365)).toBe(null);
+  });
+
+  it('grows strength with completions and decays it gradually on misses', () => {
+    const testHabit = habit({ target: 1, startDate: '2026-06-01' });
+    const entries: TrackerState['entries'] = {};
+    for (let index = 0; index < 20; index += 1) {
+      const key = toDateKey(addDays(fromDateKey('2026-06-01'), index));
+      entries[key] = { [testHabit.id]: entry(1) };
+    }
+    const state = tracker(testHabit, entries);
+
+    const strong = getHabitStrength(testHabit, state, fromDateKey('2026-06-20'));
+    expect(strong).toBeGreaterThan(0.6);
+
+    // Four full misses afterward soften the score instead of resetting it.
+    const decayed = getHabitStrength(testHabit, state, fromDateKey('2026-06-25'));
+    expect(decayed).toBeLessThan(strong);
+    expect(decayed).toBeGreaterThan(strong * 0.5);
   });
 });
 

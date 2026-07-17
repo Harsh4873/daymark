@@ -1,15 +1,15 @@
 import {
   Check,
   CheckCircle2,
-  CircleDashed,
+  ChevronDown,
+  ChevronRight,
   Flame,
+  Medal,
   Minus,
-  NotebookPen,
   Plus,
   SkipForward,
-  Sparkles,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { addDays, formatFullDate, isSameDate, isToday, toDateKey } from '../dates';
 import {
   formatValue,
@@ -18,9 +18,9 @@ import {
   getHabitPeriodProgress,
   getHabitStats,
   getIntensityLevel,
-  hasLoggedValue,
+  isHabitHandledOn,
   isHabitScheduledOn,
-  scheduleLabel,
+  reachedMilestone,
 } from '../metrics';
 import type { Habit, TimeSlot, TrackerState } from '../model';
 import type { TrackerStore } from '../store';
@@ -28,10 +28,10 @@ import { useSwipeNavigation } from '../useSwipe';
 import {
   DateSwitcher,
   EmptyState,
-  GoalLabel,
   HabitBadge,
   ProgressBar,
   ProgressRing,
+  ViewHeader,
   habitStyle,
 } from '../ui';
 
@@ -46,19 +46,36 @@ interface TodayViewProps extends EntryActions {
   date: Date;
   setDate: (date: Date) => void;
   onManageHabits: () => void;
+  openHabitDetail: (habit: Habit) => void;
 }
 
-const SLOT_LABELS: Record<TimeSlot, { label: string; note: string }> = {
-  morning: { label: 'Morning', note: 'Start with intention' },
-  anytime: { label: 'Anytime', note: 'Fit these into the day' },
-  evening: { label: 'Evening', note: 'Close the loop' },
+const SLOT_LABELS: Record<TimeSlot, string> = {
+  morning: 'Morning',
+  anytime: 'Anytime',
+  evening: 'Evening',
 };
 
-function HabitCheckIn({
+function currentSlot(): TimeSlot {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'morning';
+  if (hour >= 17) return 'evening';
+  return 'anytime';
+}
+
+function buzz() {
+  try {
+    navigator.vibrate?.(12);
+  } catch {
+    // Vibration is a nice-to-have; some browsers throw on restricted contexts.
+  }
+}
+
+function HabitRow({
   habit,
   date,
   state,
   streak,
+  openHabitDetail,
   setEntryValue,
   incrementEntry,
   toggleCheck,
@@ -69,134 +86,156 @@ function HabitCheckIn({
   date: Date;
   state: TrackerState;
   streak: number;
+  openHabitDetail: (habit: Habit) => void;
 } & EntryActions) {
-  const [noteOpen, setNoteOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [popped, setPopped] = useState(false);
   const dateKey = toDateKey(date);
   const entry = getEntry(state, habit.id, date);
   const progress = getHabitPeriodProgress(habit, date, state);
   const dayChecked = Boolean(entry && !entry.skipped && entry.value > 0);
   const displayValue = habit.period === 'day' ? entry?.value ?? 0 : progress.value;
-  const status = entry?.skipped
-    ? habit.period === 'day'
-      ? 'Skipped — excluded from consistency'
-      : `Skipped for this day — the ${habit.period} goal remains active`
+  const milestone = reachedMilestone(streak);
+  const prevComplete = useRef(progress.complete);
+
+  useEffect(() => {
+    const wasComplete = prevComplete.current;
+    prevComplete.current = progress.complete;
+    if (progress.complete && !wasComplete) {
+      setPopped(true);
+      const timeout = window.setTimeout(() => setPopped(false), 600);
+      return () => window.clearTimeout(timeout);
+    }
+  }, [progress.complete]);
+
+  const statusLine = entry?.skipped
+    ? 'Skipped — excluded from consistency'
     : !progress.eligible && habit.period !== 'day'
       ? `Ramp-up ${habit.period} — activity counts, consistency does not`
-    : habit.direction === 'atMost' && progress.hasEntry && progress.value <= habit.target && habit.period !== 'day'
-      ? `Within the ${habit.period} limit so far`
-    : progress.complete
-      ? habit.period === 'day'
-        ? 'Goal met for this day'
-        : `Goal met for this ${habit.period}`
-      : hasLoggedValue(entry)
-        ? `${Math.round(progress.ratio * 100)}% toward the ${habit.period} goal`
-        : entry?.note
-          ? 'Note saved — no value logged yet'
-        : habit.direction === 'atMost'
-          ? 'Log the actual amount to close the day'
-          : 'No entry yet';
+      : habit.direction === 'atMost'
+        ? progress.hasEntry
+          ? progress.value <= habit.target
+            ? `Within the ${habit.period} limit`
+            : `Over the ${habit.period} limit`
+          : 'Log the actual amount'
+        : progress.complete
+          ? `Goal met for this ${habit.period === 'day' ? 'day' : habit.period}`
+          : `${Math.round(progress.ratio * 100)}% of the ${habit.period} goal`;
+
+  function quickCheck() {
+    if (!dayChecked) buzz();
+    toggleCheck(habit.id, dateKey);
+  }
+
+  function quickAdd() {
+    if (!progress.complete) buzz();
+    incrementEntry(habit.id, dateKey, habit.increment);
+  }
 
   return (
     <article
-      className={`checkin-card${progress.complete ? ' is-complete' : ''}${entry?.skipped ? ' is-skipped' : ''}`}
+      className={`habit-row${progress.complete ? ' is-complete' : ''}${entry?.skipped ? ' is-skipped' : ''}${popped ? ' just-completed' : ''}`}
       style={habitStyle(habit)}
     >
-      <div className="checkin-main">
+      <button
+        type="button"
+        className="habit-row-main"
+        onClick={() => setExpanded((open) => !open)}
+        aria-expanded={expanded}
+        aria-label={`${habit.name}: ${statusLine}. ${expanded ? 'Collapse' : 'Expand'} details.`}
+      >
         <HabitBadge habit={habit} />
-        <div className="checkin-copy">
-          <div className="checkin-title-row">
-            <div>
-              <h3>{habit.name}</h3>
-              <span>{habit.category} · {scheduleLabel(habit)}</span>
+        <span className="habit-row-copy">
+          <span className="habit-row-title">
+            <strong>{habit.name}</strong>
+            {streak > 0 && (
+              <em className={milestone ? 'streak-chip has-milestone' : 'streak-chip'}>
+                {milestone ? <Medal aria-hidden="true" /> : <Flame aria-hidden="true" />}
+                {streak}
+              </em>
+            )}
+          </span>
+          <span className="habit-row-progress">
+            <ProgressBar value={progress.ratio} color={habit.color} label={`${habit.name}: ${Math.round(progress.ratio * 100)} percent of goal`} />
+            <small>
+              {entry?.skipped
+                ? 'skipped'
+                : habit.metric === 'check' && habit.period === 'day'
+                  ? dayChecked ? 'done' : 'not yet'
+                  : `${formatValue(displayValue, habit)} / ${formatValue(habit.target, habit)}`}
+            </small>
+          </span>
+        </span>
+        <ChevronDown className={expanded ? 'habit-row-caret is-open' : 'habit-row-caret'} aria-hidden="true" />
+      </button>
+
+      {habit.metric === 'check' ? (
+        <button
+          type="button"
+          className={dayChecked ? 'row-action row-check is-done' : 'row-action row-check'}
+          onClick={quickCheck}
+          disabled={Boolean(entry?.skipped)}
+          aria-label={dayChecked ? `Undo ${habit.name}` : `Mark ${habit.name} done`}
+        >
+          <Check aria-hidden="true" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="row-action row-add"
+          onClick={quickAdd}
+          disabled={Boolean(entry?.skipped)}
+          aria-label={`Add ${habit.increment} ${habit.unit} to ${habit.name}`}
+        >
+          <Plus aria-hidden="true" />
+          <small>{habit.increment}</small>
+        </button>
+      )}
+
+      {expanded && (
+        <div className="habit-row-detail">
+          <span className="habit-row-status">{statusLine}</span>
+          {habit.metric !== 'check' && (
+            <div className="value-stepper" aria-label={`Log ${habit.name}`}>
+              <button type="button" onClick={() => incrementEntry(habit.id, dateKey, -habit.increment)} aria-label={`Subtract ${habit.increment} ${habit.unit}`}>
+                <Minus aria-hidden="true" />
+              </button>
+              <label>
+                <span className="sr-only">{habit.name} value in {habit.unit}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={entry?.skipped ? 0 : entry?.value ?? 0}
+                  onChange={(event) => setEntryValue(habit.id, dateKey, Number(event.target.value))}
+                />
+                <small>{habit.unit}</small>
+              </label>
+              <button type="button" onClick={() => incrementEntry(habit.id, dateKey, habit.increment)} aria-label={`Add ${habit.increment} ${habit.unit}`}>
+                <Plus aria-hidden="true" />
+              </button>
             </div>
-            <div className="checkin-tags">
-              {streak > 0 && (
-                <span className="streak-chip" title={`${streak} ${habit.period}${streak === 1 ? '' : 's'} in a row`}>
-                  <Flame aria-hidden="true" />
-                  {streak}
-                </span>
-              )}
-              <GoalLabel habit={habit} />
-            </div>
-          </div>
-          <ProgressBar value={progress.ratio} color={habit.color} label={`${habit.name}: ${Math.round(progress.ratio * 100)} percent of goal`} />
-          <div className="checkin-status">
-            <span>{status}</span>
-            <strong>{formatValue(displayValue, habit)}</strong>
+          )}
+          <label className="entry-note">
+            <span>Note</span>
+            <textarea
+              value={entry?.note ?? ''}
+              onChange={(event) => setEntryNote(habit.id, dateKey, event.target.value)}
+              placeholder="A cue, win, obstacle, or detail worth remembering…"
+              rows={2}
+            />
+          </label>
+          <div className="habit-row-detail-actions">
+            <button type="button" className="quiet-action" onClick={() => toggleSkip(habit.id, dateKey)}>
+              <SkipForward aria-hidden="true" />
+              <span>{entry?.skipped ? 'Unskip' : 'Skip today'}</span>
+            </button>
+            <button type="button" className="quiet-action" onClick={() => openHabitDetail(habit)}>
+              <ChevronRight aria-hidden="true" />
+              <span>Full history</span>
+            </button>
           </div>
         </div>
-      </div>
-
-      <div className="checkin-actions">
-        {habit.metric === 'check' ? (
-          <button
-            type="button"
-            className={dayChecked ? 'check-button checked' : 'check-button'}
-            onClick={() => toggleCheck(habit.id, dateKey)}
-            aria-label={dayChecked ? `Undo ${habit.name} for this day` : `Mark ${habit.name} for this day`}
-          >
-            {dayChecked ? <Check aria-hidden="true" /> : <CircleDashed aria-hidden="true" />}
-            <span>{dayChecked ? 'Logged' : 'Mark done'}</span>
-          </button>
-        ) : (
-          <div className="value-stepper" aria-label={`Log ${habit.name}`}>
-            <button
-              type="button"
-              onClick={() => incrementEntry(habit.id, dateKey, -habit.increment)}
-              aria-label={`Subtract ${habit.increment} ${habit.unit}`}
-            >
-              <Minus aria-hidden="true" />
-            </button>
-            <label>
-              <span className="sr-only">{habit.name} value in {habit.unit}</span>
-              <input
-                type="number"
-                min="0"
-                step="any"
-                value={entry?.skipped ? 0 : entry?.value ?? 0}
-                onChange={(event) => setEntryValue(habit.id, dateKey, Number(event.target.value))}
-              />
-              <small>{habit.unit}</small>
-            </label>
-            <button
-              type="button"
-              onClick={() => incrementEntry(habit.id, dateKey, habit.increment)}
-              aria-label={`Add ${habit.increment} ${habit.unit}`}
-            >
-              <Plus aria-hidden="true" />
-            </button>
-          </div>
-        )}
-
-        <button
-          type="button"
-          className={noteOpen || entry?.note ? 'quiet-action active' : 'quiet-action'}
-          onClick={() => setNoteOpen((open) => !open)}
-          aria-expanded={noteOpen}
-        >
-          <NotebookPen aria-hidden="true" />
-          <span>Note</span>
-        </button>
-        <button
-          type="button"
-          className={entry?.skipped ? 'quiet-action active' : 'quiet-action'}
-          onClick={() => toggleSkip(habit.id, dateKey)}
-        >
-          <SkipForward aria-hidden="true" />
-          <span>{entry?.skipped ? 'Unskip' : 'Skip'}</span>
-        </button>
-      </div>
-
-      {noteOpen && (
-        <label className="entry-note">
-          <span>Day note</span>
-          <textarea
-            value={entry?.note ?? ''}
-            onChange={(event) => setEntryNote(habit.id, dateKey, event.target.value)}
-            placeholder="A cue, win, obstacle, or detail worth remembering…"
-            rows={2}
-          />
-        </label>
       )}
     </article>
   );
@@ -208,21 +247,17 @@ export function TodayView({
   date,
   setDate,
   onManageHabits,
+  openHabitDetail,
   ...actions
 }: TodayViewProps) {
+  const [doneOpen, setDoneOpen] = useState(false);
   const eligible = habits.filter((habit) => isHabitScheduledOn(habit, date));
   const snapshot = getDaySnapshot(state, date, habits);
   const dateIsToday = isToday(date);
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-  const title = dateIsToday
-    ? `${greeting}, ${state.profile.displayName || 'Harsh'}.`
-    : `A look back at ${date.toLocaleDateString('en-US', { weekday: 'long' })}.`;
   const activeStats = useMemo(
     () => habits.map((habit) => ({ habit, stats: getHabitStats(habit, state, date) })),
     [habits, state, date],
   );
-  const leading = [...activeStats].sort((left, right) => right.stats.currentStreak - left.stats.currentStreak)[0];
   const streakByHabit = new Map(activeStats.map(({ habit, stats }) => [habit.id, stats.currentStreak]));
   const stripDays = Array.from({ length: 7 }, (_, index) => addDays(new Date(), index - 6));
   const swipe = useSwipeNavigation(
@@ -230,52 +265,49 @@ export function TodayView({
     dateIsToday ? undefined : () => setDate(addDays(date, 1)),
   );
 
+  const remaining = eligible.filter((habit) => !isHabitHandledOn(habit, date, state));
+  const done = eligible.filter((habit) => isHabitHandledOn(habit, date, state));
+  const dayComplete = eligible.length > 0 && remaining.length === 0;
+  const focusSlot = currentSlot();
+
+  function renderRow(habit: Habit) {
+    return (
+      <HabitRow
+        key={`${habit.id}-${toDateKey(date)}`}
+        habit={habit}
+        date={date}
+        state={state}
+        streak={streakByHabit.get(habit.id) ?? 0}
+        openHabitDetail={openHabitDetail}
+        {...actions}
+      />
+    );
+  }
+
   return (
     <div className="view-shell today-view" {...swipe}>
-      <section className="today-hero">
-        <div className="today-intro">
-          <span className="view-kicker">Daily field note · {formatFullDate(date)}</span>
-          <h1 tabIndex={-1}>{title}</h1>
-          <p>
-            {dateIsToday
-              ? 'Log the real day—not the perfect one. Partial progress still leaves a useful signal.'
-              : 'Past days stay editable, so the record can match what actually happened.'}
-          </p>
-          <DateSwitcher
-            eyebrow="Selected day"
-            label={dateIsToday ? 'Today' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            onPrevious={() => setDate(addDays(date, -1))}
-            onNext={() => setDate(addDays(date, 1))}
-            nextDisabled={dateIsToday}
-            onToday={dateIsToday ? undefined : () => setDate(new Date())}
-          />
-        </div>
-
-        <div className="today-score-card">
-          <ProgressRing value={snapshot.score}>
-            <strong>{Math.round(snapshot.score * 100)}%</strong>
-            <span>day score</span>
-          </ProgressRing>
-          <div>
-            <span>{dateIsToday ? 'Today’s signal' : 'Day signal'}</span>
-            <strong>{snapshot.logged} of {eligible.length}</strong>
-            <p>habits have an entry</p>
-          </div>
-          <div className="score-card-foot">
-            <Sparkles aria-hidden="true" />
-            <span>
-              {leading && leading.stats.currentStreak > 0
-                ? `${leading.habit.name} leads with a ${leading.stats.currentStreak}-${leading.habit.period} streak.`
-                : 'The first honest check-in is enough to start the pattern.'}
-            </span>
-          </div>
-        </div>
-      </section>
+      <ViewHeader
+        title={dateIsToday ? 'Today' : date.toLocaleDateString('en-US', { weekday: 'long' })}
+        sub={`${formatFullDate(date)} · ${remaining.length} left · ${snapshot.completed} done${snapshot.skipped ? ` · ${snapshot.skipped} skipped` : ''}`}
+      >
+        <ProgressRing value={snapshot.score} size="small">
+          <strong>{Math.round(snapshot.score * 100)}%</strong>
+        </ProgressRing>
+        <DateSwitcher
+          compact
+          eyebrow="Selected day"
+          label={dateIsToday ? 'Today' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+          onPrevious={() => setDate(addDays(date, -1))}
+          onNext={() => setDate(addDays(date, 1))}
+          nextDisabled={dateIsToday}
+          onToday={dateIsToday ? undefined : () => setDate(new Date())}
+        />
+      </ViewHeader>
 
       <section className="week-strip" aria-label="The last seven days">
         {stripDays.map((day) => {
-          const snapshot = getDaySnapshot(state, day);
-          const level = getIntensityLevel(snapshot.scheduled > 0 ? snapshot.score : 0);
+          const daySnapshot = getDaySnapshot(state, day);
+          const level = getIntensityLevel(daySnapshot.scheduled > 0 ? daySnapshot.score : 0);
           const selected = isSameDate(day, date);
           return (
             <button
@@ -284,7 +316,7 @@ export function TodayView({
               key={toDateKey(day)}
               onClick={() => setDate(day)}
               aria-current={selected ? 'date' : undefined}
-              aria-label={`${formatFullDate(day)}: ${snapshot.scheduled > 0 ? `${Math.round(snapshot.score * 100)} percent day score` : 'rest day'}`}
+              aria-label={`${formatFullDate(day)}: ${daySnapshot.scheduled > 0 ? `${Math.round(daySnapshot.score * 100)} percent day score` : 'rest day'}`}
             >
               <span>{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
               <strong>{day.getDate()}</strong>
@@ -294,45 +326,60 @@ export function TodayView({
         })}
       </section>
 
-      <section className="daily-status-strip" aria-label="Daily status">
-        <div><CheckCircle2 aria-hidden="true" /><span><strong>{snapshot.completed}</strong> goals met</span></div>
-        <div><NotebookPen aria-hidden="true" /><span><strong>{snapshot.logged}</strong> logged</span></div>
-        <div><SkipForward aria-hidden="true" /><span><strong>{snapshot.skipped}</strong> intentionally skipped</span></div>
-      </section>
-
       {eligible.length === 0 ? (
         <EmptyState
           icon={<CheckCircle2 aria-hidden="true" />}
-          title="Nothing scheduled here"
-          copy="This is a rest day—or your habit list is ready for a new rhythm."
+          title="Nothing scheduled"
+          copy="A rest day, or room for a new habit."
           action={<button type="button" className="button button-primary" onClick={onManageHabits}>Manage habits</button>}
         />
       ) : (
-        (['morning', 'anytime', 'evening'] as TimeSlot[]).map((slot) => {
-          const slotHabits = eligible.filter((habit) => habit.timeSlot === slot);
-          if (!slotHabits.length) return null;
-          return (
-            <section className="checkin-section" key={slot}>
-              <div className="slot-heading">
-                <h2>{SLOT_LABELS[slot].label}</h2>
-                <p>{SLOT_LABELS[slot].note}</p>
-                <small>{slotHabits.length} {slotHabits.length === 1 ? 'habit' : 'habits'}</small>
-              </div>
-              <div className="checkin-list">
-                {slotHabits.map((habit) => (
-                  <HabitCheckIn
-                    key={`${habit.id}-${toDateKey(date)}`}
-                    habit={habit}
-                    date={date}
-                    state={state}
-                    streak={streakByHabit.get(habit.id) ?? 0}
-                    {...actions}
-                  />
-                ))}
-              </div>
+        <>
+          {dayComplete && (
+            <div className="day-complete" role="status">
+              <CheckCircle2 aria-hidden="true" />
+              <strong>Day complete</strong>
+              <span>{snapshot.completed} goals · {Math.round(snapshot.score * 100)}%</span>
+            </div>
+          )}
+
+          {(['morning', 'anytime', 'evening'] as TimeSlot[]).map((slot) => {
+            const slotHabits = remaining.filter((habit) => habit.timeSlot === slot);
+            if (!slotHabits.length) return null;
+            return (
+              <section className="checkin-section" key={slot}>
+                <div className={slot === focusSlot && dateIsToday ? 'slot-label is-now' : 'slot-label'}>
+                  <h2>{SLOT_LABELS[slot]}</h2>
+                  {slot === focusSlot && dateIsToday && <span>now</span>}
+                  <small>{slotHabits.length}</small>
+                </div>
+                <div className="habit-row-list">
+                  {slotHabits.map(renderRow)}
+                </div>
+              </section>
+            );
+          })}
+
+          {done.length > 0 && (
+            <section className="done-section">
+              <button
+                type="button"
+                className="done-toggle"
+                onClick={() => setDoneOpen((open) => !open)}
+                aria-expanded={doneOpen}
+              >
+                <ChevronRight className={doneOpen ? 'is-open' : ''} aria-hidden="true" />
+                <span>Done</span>
+                <small>{done.length}</small>
+              </button>
+              {doneOpen && (
+                <div className="habit-row-list done-list">
+                  {done.map(renderRow)}
+                </div>
+              )}
             </section>
-          );
-        })
+          )}
+        </>
       )}
     </div>
   );

@@ -17,11 +17,13 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { clampToToday } from './dates';
-import { isHabitActiveOn } from './metrics';
+import { isHabitActiveOn, isHabitHandledOn, isHabitScheduledOn } from './metrics';
+import type { Habit } from './model';
 import { useTrackerStore } from './store';
 import { useDaymarkSync, type SyncStatus } from './useDaymarkSync';
+import { HabitDetail } from './views/HabitDetail';
 import { MonthView } from './views/MonthView';
-import { ProfileView } from './views/ProfileView';
+import { HabitEditor, ProfileView } from './views/ProfileView';
 import { TodayView } from './views/TodayView';
 import { WeekView } from './views/WeekView';
 import { YearView } from './views/YearView';
@@ -67,6 +69,8 @@ export default function App() {
   const [weekDate, setWeekDate] = useState(new Date());
   const [monthDate, setMonthDate] = useState(new Date());
   const [yearDate, setYearDate] = useState(new Date());
+  const [detailHabitId, setDetailHabitId] = useState<string | null>(null);
+  const [editorState, setEditorState] = useState<{ habit: Habit; locked: boolean } | null>(null);
   const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   const firstViewRender = useRef(true);
   const themePreference = store.state?.profile.theme;
@@ -104,6 +108,19 @@ export default function App() {
     return () => window.cancelAnimationFrame(frame);
   }, [view, ready]);
 
+  // Mirror today's remaining habit count onto the installed PWA icon.
+  useEffect(() => {
+    const nav = navigator as Navigator & { setAppBadge?: (count?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (!nav.setAppBadge) return;
+    const current = store.state;
+    if (!current) return;
+    const today = new Date();
+    const remaining = current.habits.filter(
+      (habit) => isHabitScheduledOn(habit, today) && !isHabitHandledOn(habit, today, current),
+    ).length;
+    void (remaining > 0 ? nav.setAppBadge(remaining) : nav.clearAppBadge?.())?.catch(() => {});
+  }, [store.state]);
+
   function navigate(nextView: ViewId) {
     if (window.location.hash === `#${nextView}`) setView(nextView);
     else window.location.hash = nextView;
@@ -128,8 +145,13 @@ export default function App() {
   const syncPresentation = SYNC_PRESENTATION[sync.status];
   const SyncIcon = syncPresentation.icon;
   const dailyHabits = state.habits.filter((habit) => isHabitActiveOn(habit, dailyDate));
+  const detailHabit = detailHabitId ? state.habits.find((habit) => habit.id === detailHabitId) ?? null : null;
   function toggleTheme() {
     store.updateProfile({ theme: resolvedTheme === 'dark' ? 'light' : 'dark' });
+  }
+
+  function openHabitDetail(habit: Habit) {
+    setDetailHabitId(habit.id);
   }
 
   return (
@@ -193,6 +215,7 @@ export default function App() {
             date={dailyDate}
             setDate={(date) => setDailyDate(clampToToday(date))}
             onManageHabits={() => navigate('profile')}
+            openHabitDetail={openHabitDetail}
             setEntryValue={store.setEntryValue}
             incrementEntry={store.incrementEntry}
             toggleCheck={store.toggleCheck}
@@ -200,9 +223,9 @@ export default function App() {
             setEntryNote={store.setEntryNote}
           />
         )}
-        {view === 'weekly' && <WeekView state={state} habits={state.habits} date={weekDate} setDate={setWeekDate} openDay={openDay} />}
+        {view === 'weekly' && <WeekView state={state} habits={state.habits} date={weekDate} setDate={setWeekDate} openDay={openDay} openHabitDetail={openHabitDetail} />}
         {view === 'monthly' && <MonthView state={state} habits={state.habits} date={monthDate} setDate={setMonthDate} openDay={openDay} />}
-        {view === 'year' && <YearView state={state} habits={state.habits} date={yearDate} setDate={setYearDate} openDay={openDay} />}
+        {view === 'year' && <YearView state={state} habits={state.habits} date={yearDate} setDate={setYearDate} openDay={openDay} openHabitDetail={openHabitDetail} />}
         {view === 'profile' && (
           <ProfileView
             state={state}
@@ -215,16 +238,42 @@ export default function App() {
             resetState={store.resetState}
             markBackedUp={store.markBackedUp}
             sync={sync}
+            openHabitDetail={openHabitDetail}
           />
         )}
       </main>
 
+      {detailHabit && (
+        <HabitDetail
+          habit={detailHabit}
+          state={state}
+          onClose={() => setDetailHabitId(null)}
+          onEdit={() => {
+            const locked = Object.values(state.entries).some((entries) => Boolean(entries[detailHabit.id]));
+            setEditorState({ habit: detailHabit, locked });
+            setDetailHabitId(null);
+          }}
+          openDay={(day) => {
+            setDetailHabitId(null);
+            openDay(day);
+          }}
+        />
+      )}
+      {editorState && (
+        <HabitEditor
+          initial={editorState.habit}
+          measurementLocked={editorState.locked}
+          onClose={() => setEditorState(null)}
+          onSave={(habit) => {
+            store.saveHabit(habit);
+            setEditorState(null);
+          }}
+        />
+      )}
+
       <footer className="app-footer">
-        <div><DaymarkLogo /><span><strong>A quiet record of showing up.</strong><small>Built for the long game, not a perfect week.</small></span></div>
-        <div className="footer-facts">
-          <span>{sync.user ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />} Local-first {sync.user ? '+ private sync' : 'storage'}</span>
-          <button type="button" onClick={() => navigate('profile')}><Settings2 aria-hidden="true" /> Data + settings</button>
-        </div>
+        <span>{sync.user ? <Cloud aria-hidden="true" /> : <HardDrive aria-hidden="true" />} Local-first{sync.user ? ' + private sync' : ' storage'}</span>
+        <button type="button" onClick={() => navigate('profile')}><Settings2 aria-hidden="true" /> Data + settings</button>
       </footer>
 
       <nav className="mobile-nav" aria-label="Daymark views">

@@ -10,22 +10,18 @@ import {
   Database,
   Download,
   Edit3,
-  FileJson,
-  HardDrive,
   LoaderCircle,
   LockKeyhole,
   LogIn,
   LogOut,
   Plus,
   RotateCcw,
-  ShieldCheck,
-  Sparkles,
   Upload,
   UserRound,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toDateKey } from '../dates';
 import { habitIconMap, HabitGlyph } from '../icons';
@@ -41,7 +37,7 @@ import {
   type TrackerState,
 } from '../model';
 import { parseTrackerState, type TrackerStore } from '../store';
-import { HabitBadge, ProgressBar, SectionHeading, habitStyle } from '../ui';
+import { HabitBadge, ProgressBar, ViewHeader, habitStyle, useModalDialog } from '../ui';
 import type { DaymarkSync, SyncStatus } from '../useDaymarkSync';
 
 interface ProfileViewProps {
@@ -55,6 +51,7 @@ interface ProfileViewProps {
   resetState: TrackerStore['resetState'];
   markBackedUp: TrackerStore['markBackedUp'];
   sync: DaymarkSync;
+  openHabitDetail: (habit: Habit) => void;
 }
 
 const SYNC_PRESENTATION: Record<SyncStatus, { label: string; icon: LucideIcon }> = {
@@ -145,7 +142,7 @@ function scheduleMode(schedule: HabitSchedule) {
   return schedule.days.join(',') === '1,2,3,4,5' ? 'weekdays' : 'custom';
 }
 
-function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
+export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
   initial: Habit;
   measurementLocked: boolean;
   onClose: () => void;
@@ -155,58 +152,8 @@ function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
   const [error, setError] = useState('');
   const dialogRef = useRef<HTMLElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const openerRef = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
   const mode = scheduleMode(habit.schedule);
-
-  useEffect(() => {
-    const previousFocus = openerRef.current;
-    const background = document.querySelector<HTMLElement>('.app-shell');
-    const previousAriaHidden = background ? background.getAttribute('aria-hidden') : null;
-    const previousOverflow = document.body.style.overflow;
-    if (background) {
-      background.inert = true;
-      background.setAttribute('aria-hidden', 'true');
-    }
-    document.body.style.overflow = 'hidden';
-
-    const focusableSelector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
-    const frame = window.requestAnimationFrame(() => nameInputRef.current?.focus());
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== 'Tab' || !dialogRef.current) return;
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector)];
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener('keydown', handleKeyDown);
-      if (background) {
-        background.inert = false;
-        if (previousAriaHidden === null) background.removeAttribute('aria-hidden');
-        else background.setAttribute('aria-hidden', previousAriaHidden);
-      }
-      document.body.style.overflow = previousOverflow;
-      previousFocus?.focus();
-    };
-  }, []);
+  useModalDialog(dialogRef, onClose, nameInputRef);
 
   function update(patch: Partial<Habit>) {
     setHabit((current) => ({ ...current, ...patch }));
@@ -476,6 +423,7 @@ export function ProfileView({
   resetState,
   markBackedUp,
   sync,
+  openHabitDetail,
 }: ProfileViewProps) {
   const [editor, setEditor] = useState<{ habit: Habit; locked: boolean } | null>(null);
   const [dataMessage, setDataMessage] = useState('');
@@ -555,24 +503,12 @@ export function ProfileView({
 
   return (
     <div className="view-shell profile-view">
-      <SectionHeading
-        eyebrow="Profile + system"
-        title="Shape Daymark around your life."
-        copy="Change the goal, unit, rhythm, visual marker, and ordering. Your record stays available offline and syncs privately between your devices."
-        action={<button type="button" className="button button-primary" onClick={() => setEditor({ habit: createHabit(), locked: false })}><Plus aria-hidden="true" /> New habit</button>}
-      />
-
-      <section className="profile-hero-grid">
-        <article className="panel identity-panel">
-          <div className="profile-monogram">{(state.profile.displayName || 'H').slice(0, 1).toUpperCase()}</div>
-          <div><span>Daymark profile</span><h2>{state.profile.displayName || 'Your'}’s Daymark</h2><p>{active.length} active habits · {entryCount} lifetime entries</p></div>
-          <Sparkles aria-hidden="true" />
-        </article>
-        <article className="panel privacy-panel">
-          <ShieldCheck aria-hidden="true" />
-          <div><span>Private by design</span><h2>Account-locked sync</h2><p>Only your verified Google account can access Daymark. There is no analytics tracking.</p></div>
-        </article>
-      </section>
+      <ViewHeader
+        title="Profile"
+        sub={`${active.length} active habits · ${entryCount} lifetime entries`}
+      >
+        <button type="button" className="button button-primary" onClick={() => setEditor({ habit: createHabit(), locked: false })}><Plus aria-hidden="true" /> New habit</button>
+      </ViewHeader>
 
       <section className={`panel sync-panel sync-panel-${sync.status}`} aria-labelledby="profile-sync-title" aria-busy={authAction !== null || sync.status === 'syncing'}>
         <div className="sync-panel-mark" aria-hidden="true"><SyncIcon /></div>
@@ -582,7 +518,7 @@ export function ProfileView({
             <span className={`sync-state-pill sync-state-${sync.status}`} aria-live="polite"><SyncIcon aria-hidden="true" /> {syncPresentation.label}</span>
           </div>
 
-          {sync.user ? (
+          {sync.user && (
             <div className="sync-account-row">
               <div className="sync-account">
                 {sync.user.photoURL
@@ -592,14 +528,9 @@ export function ProfileView({
               </div>
               <div className="sync-timestamp"><span>Last successful sync</span><strong>{formatSyncTime(sync.lastSyncedAt)}</strong></div>
             </div>
-          ) : (
-            <p className="sync-intro">Sign in once on each device. Daymark keeps an instant on-device mirror, queues changes while offline, and reconciles them automatically after reconnecting.</p>
           )}
 
-          {sync.user && (
-            <p className="sync-detail" role="status">{sync.message ?? 'Every habit and check-in is mirrored locally and synced privately across your signed-in devices.'}</p>
-          )}
-          {!sync.user && sync.message && <p className="sync-detail" role="status">{sync.message}</p>}
+          {sync.message && <p className="sync-detail" role="status">{sync.message}</p>}
         </div>
         <div className="sync-panel-action">
           {sync.user ? (
@@ -618,7 +549,7 @@ export function ProfileView({
       </section>
 
       <section className="panel settings-panel">
-        <div className="panel-heading"><div><span>Preferences</span><h2>Make it yours</h2></div></div>
+        <div className="panel-heading compact"><div><span>Preferences</span><h2>Settings</h2></div></div>
         <div className="settings-grid">
           <label className="field"><span>Name</span><input value={state.profile.displayName} onChange={(event) => updateProfile({ displayName: event.target.value })} /></label>
           <label className="field"><span>Week starts</span><select value={state.profile.weekStartsOn} onChange={(event) => updateProfile({ weekStartsOn: Number(event.target.value) as 0 | 1 })}><option value={1}>Monday</option><option value={0}>Sunday</option></select></label>
@@ -627,7 +558,7 @@ export function ProfileView({
       </section>
 
       <section className="quick-start-section">
-        <div className="profile-section-heading"><div><span>Quick starts</span><h2>Useful patterns, one edit away</h2></div><p>Each opens as a draft. Nothing is added until you save.</p></div>
+        <div className="profile-section-heading"><div><span>Templates</span><h2>Quick starts</h2></div></div>
         <div className="quick-start-grid">
           {QUICK_STARTS.map((template) => (
             <button type="button" key={template.label} onClick={() => setEditor({ habit: createHabit(template.habit), locked: false })}>
@@ -640,7 +571,7 @@ export function ProfileView({
       </section>
 
       <section className="habit-library-section">
-        <div className="profile-section-heading"><div><span>Habit library</span><h2>{active.length} active signals</h2></div><button type="button" className="button button-secondary" onClick={() => setEditor({ habit: createHabit(), locked: false })}><Plus aria-hidden="true" /> Add custom</button></div>
+        <div className="profile-section-heading"><div><span>Habit library</span><h2>{active.length} active habits</h2></div><button type="button" className="button button-secondary" onClick={() => setEditor({ habit: createHabit(), locked: false })}><Plus aria-hidden="true" /> Add custom</button></div>
         <div className="habit-library-list">
           {active.map((habit, index) => {
             const stats = getHabitStats(habit, state);
@@ -648,10 +579,10 @@ export function ProfileView({
               <article key={habit.id} style={habitStyle(habit)}>
                 <span className="habit-order">{String(index + 1).padStart(2, '0')}</span>
                 <HabitBadge habit={habit} />
-                <div className="library-habit-copy">
+                <button type="button" className="library-habit-copy" onClick={() => openHabitDetail(habit)} aria-label={`Open ${habit.name} history`}>
                   <span><strong>{habit.name}</strong><small>{habit.category} · {scheduleLabel(habit)}</small></span>
                   <div><ProgressBar value={stats.consistency} color={habit.color} label={`${habit.name} consistency`} /><small>{Math.round(stats.consistency * 100)}% consistency</small></div>
-                </div>
+                </button>
                 <div className="library-goal"><span>Goal</span><strong>{goalLabel(habit)}</strong></div>
                 <div className="library-streak"><span>Current</span><strong>{stats.currentStreak} <small>{habit.period}{stats.currentStreak === 1 ? '' : 's'}</small></strong></div>
                 <div className="library-actions">
@@ -668,7 +599,7 @@ export function ProfileView({
 
       {archived.length > 0 && (
         <section className="archived-section">
-          <div className="profile-section-heading"><div><span>Archive</span><h2>Paused, with history intact</h2></div></div>
+          <div className="profile-section-heading"><div><span>History intact</span><h2>Archive</h2></div></div>
           <div className="archived-list">
             {archived.map((habit) => (
               <article key={habit.id} style={habitStyle(habit)}>
@@ -681,34 +612,23 @@ export function ProfileView({
         </section>
       )}
 
-      <section className="data-section">
-        <div className="profile-section-heading"><div><span>Data ownership</span><h2>Keep a portable copy</h2></div><p>Sync aligns devices. JSON is a lossless backup; CSV is easier to analyze.</p></div>
-        <div className="data-grid">
-          <article className="panel data-status-card">
-            <span className="data-icon"><Database aria-hidden="true" /></span>
-            <div><span>Offline mirror</span><h3>{storageMode === 'indexeddb' ? 'IndexedDB + fallback' : 'localStorage fallback'}</h3><p>{entryCount} entries across {state.habits.length} habits, ready instantly on this device.</p></div>
-            <small><HardDrive aria-hidden="true" /> Local-first, even without a connection</small>
-          </article>
-          <article className="panel backup-card">
-            <FileJson aria-hidden="true" />
-            <div><span>Last backup</span><h3>{state.profile.lastBackupAt ? new Date(state.profile.lastBackupAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'Not yet backed up'}</h3><p>Keep a copy somewhere you control.</p></div>
-            <div className="backup-actions">
-              <button type="button" className="button button-primary" onClick={exportBackup}><Download aria-hidden="true" /> JSON</button>
-              <button type="button" className="button button-secondary" onClick={exportCsv}><Download aria-hidden="true" /> CSV</button>
-            </div>
-          </article>
-          <article className="panel import-card">
-            <Upload aria-hidden="true" />
-            <div><span>Restore</span><h3>Import a Daymark backup</h3><p>You will see the counts before anything is replaced. When signed in, the imported record becomes the version shared by every device.</p></div>
-            <button type="button" className="button button-secondary" onClick={() => importInput.current?.click()}><Upload aria-hidden="true" /> Choose JSON</button>
-            <input ref={importInput} className="sr-only" type="file" accept="application/json,.json" aria-label="Choose a Daymark JSON backup" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0])} />
-          </article>
+      <section className="panel data-panel">
+        <div className="panel-heading compact">
+          <div><span>Data</span><h2>Backup &amp; restore</h2></div>
+        </div>
+        <div className="data-facts">
+          <span><Database aria-hidden="true" /> {storageMode === 'indexeddb' ? 'IndexedDB mirror' : 'localStorage mirror'}</span>
+          <span>{entryCount} entries · {state.habits.length} habits</span>
+          <span>Last backup: {state.profile.lastBackupAt ? new Date(state.profile.lastBackupAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'never'}</span>
+        </div>
+        <div className="data-actions">
+          <button type="button" className="button button-primary" onClick={exportBackup}><Download aria-hidden="true" /> JSON</button>
+          <button type="button" className="button button-secondary" onClick={exportCsv}><Download aria-hidden="true" /> CSV</button>
+          <button type="button" className="button button-secondary" onClick={() => importInput.current?.click()}><Upload aria-hidden="true" /> Import</button>
+          <button type="button" className="button button-danger" onClick={resetAll}><RotateCcw aria-hidden="true" /> Reset</button>
+          <input ref={importInput} className="sr-only" type="file" accept="application/json,.json" aria-label="Choose a Daymark JSON backup" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0])} />
         </div>
         {dataMessage && <p className="data-message" role="status">{dataMessage}</p>}
-        <div className="danger-zone">
-          <div><span>Start over everywhere</span><p>Restore the starter habits and remove every entry. When signed in, this reset propagates to your other devices.</p></div>
-          <button type="button" className="button button-danger" onClick={resetAll}><RotateCcw aria-hidden="true" /> Reset Daymark</button>
-        </div>
       </section>
 
       {editor && (
