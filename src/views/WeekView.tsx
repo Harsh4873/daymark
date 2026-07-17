@@ -12,6 +12,7 @@ import {
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
 import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, SectionHeading, habitStyle } from '../ui';
+import { useSwipeNavigation } from '../useSwipe';
 
 interface WeekViewProps {
   state: TrackerState;
@@ -84,9 +85,13 @@ export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProp
   const activeDays = elapsedSnapshots.filter(({ snapshot }) => snapshot.logged > 0).length;
   const periodStart = startOfWeek(new Date(), state.profile.weekStartsOn);
   const currentWeek = isSameDate(weekDays[0], periodStart);
+  const swipe = useSwipeNavigation(
+    () => setDate(addDays(date, -7)),
+    currentWeek ? undefined : () => setDate(addDays(date, 7)),
+  );
 
   return (
-    <div className="view-shell review-view week-view">
+    <div className="view-shell review-view week-view" {...swipe}>
       <SectionHeading
         eyebrow="Weekly review"
         title="See the rhythm, not just the streak."
@@ -129,12 +134,17 @@ export function WeekView({ state, habits, date, setDate, openDay }: WeekViewProp
         <div className="week-matrix-scroll">
           <div className="week-matrix" style={{ '--day-count': weekDays.length } as React.CSSProperties}>
             <div className="week-matrix-corner">Habit</div>
-            {weekDays.map((day) => (
-              <div className={isTodayInMatrix(day) ? 'matrix-day is-today' : 'matrix-day'} key={day.toISOString()}>
-                <span>{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                <strong>{day.getDate()}</strong>
-              </div>
-            ))}
+            {weekDays.map((day, index) => {
+              const { snapshot } = daySnapshots[index];
+              const elapsed = !isAfterDate(day, new Date());
+              return (
+                <div className={isTodayInMatrix(day) ? 'matrix-day is-today' : 'matrix-day'} key={day.toISOString()}>
+                  <span>{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                  <strong>{day.getDate()}</strong>
+                  <small className="matrix-day-score">{elapsed && snapshot.scheduled > 0 ? `${Math.round(snapshot.score * 100)}%` : ''}</small>
+                </div>
+              );
+            })}
             <div className="matrix-progress-heading">Week</div>
 
             {visibleHabits.map((habit) => {

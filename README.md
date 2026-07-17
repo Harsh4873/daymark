@@ -12,6 +12,9 @@ Daymark is the private, local-first habit app published at `harsh.bet/daymark/`.
 - Mirrored IndexedDB/localStorage persistence with lossless JSON backup and CSV export
 - Automatic phone/laptop sync through the existing `pickledgerpro` Firebase project
 - Offline check-ins that queue locally and reconcile after reconnecting
+- Fully responsive views with no horizontal scrolling: the weekly matrix collapses into per-habit cards on phones, and the twelve-month heatmap renders as one-month-per-row so the whole year fits in a single phone frame
+- Swipe left/right on the day, week, month, and year views to move between periods on touch screens
+- Installable PWA with an offline app shell (network-first navigations, so deploys are never stale)
 
 ## Sync and privacy
 

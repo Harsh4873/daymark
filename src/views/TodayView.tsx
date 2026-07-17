@@ -2,6 +2,7 @@ import {
   Check,
   CheckCircle2,
   CircleDashed,
+  Flame,
   Minus,
   NotebookPen,
   Plus,
@@ -16,12 +17,14 @@ import {
   getEntry,
   getHabitPeriodProgress,
   getHabitStats,
+  getIntensityLevel,
   hasLoggedValue,
   isHabitScheduledOn,
   scheduleLabel,
 } from '../metrics';
 import type { Habit, TimeSlot, TrackerState } from '../model';
 import type { TrackerStore } from '../store';
+import { useSwipeNavigation } from '../useSwipe';
 import {
   DateSwitcher,
   EmptyState,
@@ -55,6 +58,7 @@ function HabitCheckIn({
   habit,
   date,
   state,
+  streak,
   setEntryValue,
   incrementEntry,
   toggleCheck,
@@ -64,6 +68,7 @@ function HabitCheckIn({
   habit: Habit;
   date: Date;
   state: TrackerState;
+  streak: number;
 } & EntryActions) {
   const [noteOpen, setNoteOpen] = useState(false);
   const dateKey = toDateKey(date);
@@ -104,7 +109,15 @@ function HabitCheckIn({
               <h3>{habit.name}</h3>
               <span>{habit.category} · {scheduleLabel(habit)}</span>
             </div>
-            <GoalLabel habit={habit} />
+            <div className="checkin-tags">
+              {streak > 0 && (
+                <span className="streak-chip" title={`${streak} ${habit.period}${streak === 1 ? '' : 's'} in a row`}>
+                  <Flame aria-hidden="true" />
+                  {streak}
+                </span>
+              )}
+              <GoalLabel habit={habit} />
+            </div>
           </div>
           <ProgressBar value={progress.ratio} color={habit.color} label={`${habit.name}: ${Math.round(progress.ratio * 100)} percent of goal`} />
           <div className="checkin-status">
@@ -210,9 +223,15 @@ export function TodayView({
     [habits, state, date],
   );
   const leading = [...activeStats].sort((left, right) => right.stats.currentStreak - left.stats.currentStreak)[0];
+  const streakByHabit = new Map(activeStats.map(({ habit, stats }) => [habit.id, stats.currentStreak]));
+  const stripDays = Array.from({ length: 7 }, (_, index) => addDays(new Date(), index - 6));
+  const swipe = useSwipeNavigation(
+    () => setDate(addDays(date, -1)),
+    dateIsToday ? undefined : () => setDate(addDays(date, 1)),
+  );
 
   return (
-    <div className="view-shell today-view">
+    <div className="view-shell today-view" {...swipe}>
       <section className="today-hero">
         <div className="today-intro">
           <span className="view-kicker">Daily field note · {formatFullDate(date)}</span>
@@ -253,6 +272,28 @@ export function TodayView({
         </div>
       </section>
 
+      <section className="week-strip" aria-label="The last seven days">
+        {stripDays.map((day) => {
+          const snapshot = getDaySnapshot(state, day);
+          const level = getIntensityLevel(snapshot.scheduled > 0 ? snapshot.score : 0);
+          const selected = isSameDate(day, date);
+          return (
+            <button
+              type="button"
+              className={selected ? 'week-strip-day is-selected' : 'week-strip-day'}
+              key={toDateKey(day)}
+              onClick={() => setDate(day)}
+              aria-current={selected ? 'date' : undefined}
+              aria-label={`${formatFullDate(day)}: ${snapshot.scheduled > 0 ? `${Math.round(snapshot.score * 100)} percent day score` : 'rest day'}`}
+            >
+              <span>{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+              <strong>{day.getDate()}</strong>
+              <i className={`level-${level}`} aria-hidden="true" />
+            </button>
+          );
+        })}
+      </section>
+
       <section className="daily-status-strip" aria-label="Daily status">
         <div><CheckCircle2 aria-hidden="true" /><span><strong>{snapshot.completed}</strong> goals met</span></div>
         <div><NotebookPen aria-hidden="true" /><span><strong>{snapshot.logged}</strong> logged</span></div>
@@ -279,7 +320,14 @@ export function TodayView({
               </div>
               <div className="checkin-list">
                 {slotHabits.map((habit) => (
-                  <HabitCheckIn key={`${habit.id}-${toDateKey(date)}`} habit={habit} date={date} state={state} {...actions} />
+                  <HabitCheckIn
+                    key={`${habit.id}-${toDateKey(date)}`}
+                    habit={habit}
+                    date={date}
+                    state={state}
+                    streak={streakByHabit.get(habit.id) ?? 0}
+                    {...actions}
+                  />
                 ))}
               </div>
             </section>

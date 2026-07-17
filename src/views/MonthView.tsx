@@ -20,6 +20,7 @@ import {
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
 import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, SectionHeading, habitStyle } from '../ui';
+import { useSwipeNavigation } from '../useSwipe';
 
 interface MonthViewProps {
   state: TrackerState;
@@ -62,6 +63,11 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
     ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+  const swipe = useSwipeNavigation(
+    () => setDate(addMonths(date, -1)),
+    currentMonth ? undefined : () => setDate(addMonths(date, 1)),
+  );
+
   const categoryRows = categories.map((category) => {
     const categoryHabits = visibleHabits.filter((habit) => habit.category === category);
     const values = actualDays
@@ -77,7 +83,7 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
   }).sort((left, right) => right.value - left.value);
 
   return (
-    <div className="view-shell review-view month-view">
+    <div className="view-shell review-view month-view" {...swipe}>
       <SectionHeading
         eyebrow="Monthly review"
         title="Patterns become visible at this distance."

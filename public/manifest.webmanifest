@@ -1,0 +1,38 @@
+{
+  "name": "Daymark",
+  "short_name": "Daymark",
+  "description": "A quiet record of showing up. Private, local-first habit tracking.",
+  "id": "/daymark/",
+  "start_url": "/daymark/",
+  "scope": "/daymark/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#101311",
+  "theme_color": "#101311",
+  "icons": [
+    {
+      "src": "/daymark/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/daymark/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/daymark/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/daymark/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

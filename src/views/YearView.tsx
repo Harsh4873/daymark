@@ -1,6 +1,7 @@
 import { Award, CalendarRange, ChevronLeft, ChevronRight, Flame, Info, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import {
+  addDays,
   addYears,
   formatCompactDate,
   formatDateRange,
@@ -20,6 +21,8 @@ import {
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
 import { EmptyState, HabitBadge, MetricCard, SectionHeading, habitStyle } from '../ui';
+import { useMediaQuery } from '../useMediaQuery';
+import { useSwipeNavigation } from '../useSwipe';
 
 type HeatStyle = CSSProperties & { '--heat-color': string };
 
@@ -31,15 +34,40 @@ interface YearViewProps {
   openDay: (date: Date) => void;
 }
 
+interface MonthRow {
+  key: string;
+  label: string;
+  days: Array<Date | null>;
+}
+
 export function YearView({ state, habits, date, setDate, openDay }: YearViewProps) {
   const [filter, setFilter] = useState('all');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const heatmapScroll = useRef<HTMLDivElement>(null);
+  const compact = useMediaQuery('(max-width: 700px)');
   const days = useMemo(
     () => getRollingHeatmapDays(date, state.profile.weekStartsOn),
     [date, state.profile.weekStartsOn],
   );
   const weeks = Array.from({ length: 53 }, (_, index) => days.slice(index * 7, index * 7 + 7));
+  const monthRows = useMemo(() => {
+    const rows: MonthRow[] = [];
+    days.forEach((day) => {
+      const key = `${day.getFullYear()}-${day.getMonth()}`;
+      let row = rows[rows.length - 1];
+      if (!row || row.key !== key) {
+        const yearMark = !rows.length || day.getMonth() === 0;
+        row = {
+          key,
+          label: day.toLocaleDateString('en-US', { month: 'short' }) + (yearMark ? ` ’${String(day.getFullYear()).slice(2)}` : ''),
+          days: Array.from({ length: 31 }, () => null),
+        };
+        rows.push(row);
+      }
+      row.days[day.getDate() - 1] = day;
+    });
+    return rows;
+  }, [days]);
   const historicalHabits = habits.filter((habit) => days.some((day) => isHabitActiveOn(habit, day)));
   const categories = [...new Set(historicalHabits.map((habit) => habit.category))];
   const filteredHabits = filter === 'all'
@@ -51,6 +79,10 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
   const todayKey = toDateKey(new Date());
   const today = fromDateKey(todayKey);
   const currentWindow = date.getFullYear() === today.getFullYear();
+  const swipe = useSwipeNavigation(
+    () => setDate(addYears(date, -1)),
+    currentWindow ? undefined : () => setDate(addYears(date, 1)),
+  );
 
   useEffect(() => {
     const element = heatmapScroll.current;
@@ -112,8 +144,34 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
     heatmapScroll.current?.querySelector<HTMLButtonElement>(`[data-heat-index="${target}"]`)?.focus();
   }
 
+  function handleCompactCellKey(event: KeyboardEvent<HTMLButtonElement>, day: Date) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      openDay(day);
+      return;
+    }
+    let target: Date | null = null;
+    if (event.key === 'ArrowLeft') target = addDays(day, -1);
+    else if (event.key === 'ArrowRight') target = addDays(day, 1);
+    else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const direction = event.key === 'ArrowUp' ? -1 : 1;
+      const month = new Date(day.getFullYear(), day.getMonth() + direction, 1, 12);
+      const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+      target = new Date(month.getFullYear(), month.getMonth(), Math.min(day.getDate(), lastDay), 12);
+    }
+    if (!target) return;
+    event.preventDefault();
+    const key = toDateKey(target);
+    if (key < toDateKey(days[0]) || key > toDateKey(days[days.length - 1]) || isAfterDate(target, today)) return;
+    setSelectedDate(target);
+    event.currentTarget
+      .closest('[data-heatmap-root]')
+      ?.querySelector<HTMLButtonElement>(`[data-heat-key="${key}"]`)
+      ?.focus();
+  }
+
   return (
-    <div className="view-shell review-view year-view">
+    <div className="view-shell review-view year-view" {...swipe}>
       <SectionHeading
         eyebrow="Twelve-month review"
         title="Your life, rendered as evidence."
@@ -166,6 +224,42 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
 
         {!filteredHabits.length ? (
           <EmptyState icon={<CalendarRange aria-hidden="true" />} title="No habits in this lens" copy="Choose another category or add a habit to this one." />
+        ) : compact ? (
+          <div className="heatmap-month-wall" data-heatmap-root role="grid" aria-label="Habit consistency heatmap, one row per month">
+            {monthRows.map((row) => (
+              <div className="heatmap-month-row" role="row" key={row.key}>
+                <span className="heatmap-month-label" role="rowheader">{row.label}</span>
+                {row.days.map((day, index) => {
+                  if (!day) return <i className="heat-void" key={index} aria-hidden="true" />;
+                  const future = isAfterDate(day, today);
+                  const ratio = future ? 0 : ratioForDay(day);
+                  const snapshot = getDaySnapshot(state, day, filteredHabits);
+                  const level = getIntensityLevel(ratio);
+                  const selected = isSameDate(day, selectedDate);
+                  const label = future
+                    ? `${formatCompactDate(day)}, future day`
+                    : `${formatCompactDate(day)}: ${snapshot.logged} entries, ${Math.round(ratio * 100)} percent`;
+                  return (
+                    <button
+                      type="button"
+                      role="gridcell"
+                      className={`heat-cell level-${level}${future ? ' is-future' : ''}${selected ? ' is-selected' : ''}${snapshot.skipped ? ' has-skip' : ''}`}
+                      data-heat-key={toDateKey(day)}
+                      key={toDateKey(day)}
+                      onClick={() => setSelectedDate(day)}
+                      onDoubleClick={() => openDay(day)}
+                      onKeyDown={(event) => handleCompactCellKey(event, day)}
+                      disabled={future}
+                      tabIndex={selected ? 0 : -1}
+                      aria-label={label}
+                      aria-selected={selected}
+                      title={label}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="heatmap-shell">
             <div className="heatmap-weekdays" aria-hidden="true">
@@ -217,7 +311,11 @@ export function YearView({ state, habits, date, setDate, openDay }: YearViewProp
 
         <div className="heatmap-caption">
           <Info aria-hidden="true" />
-          <p>Click a square for its day record. Use arrow keys to move, Enter to open the day, or double-click with a pointer. Skips never count as failures.</p>
+          <p>
+            {compact
+              ? 'Each row is a month. Tap a square for its day record, then use “Open day” to edit it. Skips never count as failures.'
+              : 'Click a square for its day record. Use arrow keys to move, Enter to open the day, or double-click with a pointer. Skips never count as failures.'}
+          </p>
         </div>
       </section>
 

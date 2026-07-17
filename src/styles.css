@@ -958,6 +958,100 @@ main {
   color: var(--green);
 }
 
+.week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 18px;
+}
+
+.week-strip-day {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 11px 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color 130ms ease, background 130ms ease;
+}
+
+.week-strip-day:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.week-strip-day.is-selected {
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+  background: color-mix(in srgb, var(--green) 7%, var(--surface));
+}
+
+.week-strip-day span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.week-strip-day strong {
+  color: var(--text-soft);
+  font-family: var(--font-display);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.week-strip-day i {
+  width: 18px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+}
+
+.week-strip-day i.level-1 {
+  background: color-mix(in srgb, var(--green) 24%, var(--surface-3));
+}
+
+.week-strip-day i.level-2 {
+  background: color-mix(in srgb, var(--green) 47%, var(--surface-3));
+}
+
+.week-strip-day i.level-3 {
+  background: color-mix(in srgb, var(--green) 72%, var(--surface-3));
+}
+
+.week-strip-day i.level-4 {
+  background: var(--green);
+}
+
+.checkin-tags {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.streak-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--coral) 42%, transparent);
+  border-radius: 99px;
+  color: var(--coral);
+  background: color-mix(in srgb, var(--coral) 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.streak-chip svg {
+  width: 11px;
+  height: 11px;
+}
+
 .daily-status-strip {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1375,8 +1469,7 @@ main {
 
 .week-matrix {
   display: grid;
-  grid-template-columns: 230px repeat(7, minmax(74px, 1fr)) 190px;
-  min-width: 1030px;
+  grid-template-columns: minmax(150px, 230px) repeat(7, minmax(0, 1fr)) minmax(120px, 190px);
 }
 
 .week-matrix-corner,
@@ -1429,6 +1522,12 @@ main {
   font-family: var(--font-display);
   font-size: 19px;
   line-height: 1;
+}
+
+.matrix-day-score {
+  min-height: 9px;
+  font-size: 7px;
+  letter-spacing: 0.04em;
 }
 
 .matrix-day.is-today {
@@ -2062,7 +2161,7 @@ main {
 
 .heatmap-weekdays {
   display: grid;
-  grid-template-rows: repeat(7, 20px);
+  grid-template-rows: repeat(7, minmax(0, 1fr));
   gap: 4px;
   padding-top: 23px;
 }
@@ -2077,18 +2176,13 @@ main {
 }
 
 .heatmap-scroll {
-  overflow-x: auto;
-  padding-bottom: 10px;
-  overscroll-behavior-inline: contain;
-  scrollbar-color: var(--surface-3) transparent;
-  scrollbar-width: thin;
+  overflow: visible;
 }
 
 .heatmap-months {
   display: grid;
-  grid-template-columns: repeat(53, 20px);
+  grid-template-columns: repeat(53, minmax(0, 1fr));
   gap: 4px;
-  min-width: 1268px;
   height: 23px;
 }
 
@@ -2102,24 +2196,22 @@ main {
 
 .heatmap-grid {
   display: grid;
-  grid-template-rows: repeat(7, 20px);
   gap: 4px;
-  width: max-content;
 }
 
 .heatmap-row {
   display: grid;
-  grid-template-columns: repeat(53, 20px);
+  grid-template-columns: repeat(53, minmax(0, 1fr));
   gap: 4px;
 }
 
 .heat-cell {
   position: relative;
-  width: 20px;
-  height: 20px;
+  width: 100%;
+  aspect-ratio: 1;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--heat-color) 12%, var(--line));
-  border-radius: 5px;
+  border-radius: min(5px, 28%);
   background: var(--surface-3);
   transition: transform 130ms ease, border-color 130ms ease;
 }
@@ -2149,6 +2241,50 @@ main {
   border-radius: 50%;
   content: '';
   background: var(--coral);
+}
+
+.heatmap-month-wall {
+  display: grid;
+  gap: 3px;
+  padding: 18px 14px 15px;
+}
+
+.heatmap-month-row {
+  display: grid;
+  grid-template-columns: 34px repeat(31, minmax(0, 1fr));
+  gap: 3px;
+  align-items: center;
+}
+
+.heatmap-month-label {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.heatmap-month-wall .heat-cell {
+  border-radius: min(3px, 30%);
+}
+
+.heat-void {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+.heatmap-month-wall .heat-cell.has-skip::after {
+  top: 1px;
+  right: 1px;
+  width: 3px;
+  height: 3px;
+}
+
+.heatmap-month-wall .heat-cell.is-selected {
+  box-shadow: 0 0 0 1px var(--surface), 0 0 0 3px var(--coral);
 }
 
 .heatmap-caption {
@@ -3438,8 +3574,79 @@ main {
     font-size: clamp(42px, 8vw, 65px);
   }
 
+  .week-matrix-scroll {
+    overflow: visible;
+  }
+
   .week-matrix {
-    min-width: 1000px;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    column-gap: 5px;
+  }
+
+  .week-matrix-corner,
+  .matrix-progress-heading {
+    display: none;
+  }
+
+  .matrix-day {
+    min-height: 0;
+    padding: 12px 2px 10px;
+    gap: 3px;
+    border-right: 0;
+  }
+
+  .matrix-day strong {
+    font-size: 14px;
+  }
+
+  .matrix-day-score {
+    font-size: 6.5px;
+  }
+
+  .matrix-row-contents {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    column-gap: 5px;
+    padding: 10px 0 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .matrix-habit {
+    position: static;
+    grid-column: 1 / -1;
+    min-height: 0;
+    padding: 4px 12px 10px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .matrix-cell {
+    min-height: 48px;
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  .matrix-cell::before {
+    top: 2px;
+    left: 2px;
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
+    border-radius: 10px;
+    transform: none;
+  }
+
+  .matrix-cell:not(:disabled):hover::before {
+    transform: scale(1.03);
+  }
+
+  .matrix-progress {
+    grid-column: 1 / -1;
+    min-height: 0;
+    padding: 12px 12px 0;
+    gap: 7px;
+    border: 0;
   }
 
   .year-toolbar {
@@ -3704,12 +3911,51 @@ main {
     border-right: 0;
   }
 
-  .month-calendar-panel {
-    overflow-x: auto;
+  .month-week-labels,
+  .month-calendar {
+    min-width: 0;
   }
 
-  .month-calendar-panel .panel-heading {
-    min-width: 660px;
+  .month-calendar {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .month-week-labels span {
+    padding: 10px 2px;
+    font-size: 7px;
+    letter-spacing: 0.02em;
+  }
+
+  .month-day {
+    min-height: 56px;
+    padding: 7px 6px;
+  }
+
+  .month-day-number {
+    font-size: 13px;
+  }
+
+  .month-day-score {
+    font-size: 6.5px;
+    letter-spacing: 0;
+  }
+
+  .month-day-dots {
+    gap: 2px;
+    min-height: 4px;
+  }
+
+  .month-day-dots i {
+    width: 4px;
+    height: 4px;
+  }
+
+  .month-day.is-today::after {
+    top: 5px;
+    right: 5px;
+    width: 5px;
+    height: 5px;
+    border-width: 1px;
   }
 
   .year-toolbar {
@@ -3723,11 +3969,6 @@ main {
 
   .filter-select {
     grid-row: 3;
-  }
-
-  .heatmap-shell {
-    grid-template-columns: 36px minmax(0, 1fr);
-    padding: 24px 14px 17px;
   }
 
   .heatmap-caption {
