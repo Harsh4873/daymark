@@ -413,6 +413,174 @@ service cloud.firestore {
       }
     }
 
+    // Notes (private synced notes) ---------------------------------
+    function ownsNotesData(userId) {
+      return isAuthorizedGoogleAccount() && request.auth.uid == userId;
+    }
+
+    function isValidNotesId(value) {
+      return value is string
+        && value.size() > 0
+        && value.size() <= 128
+        && value.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function isValidNotesLabelAt(labels, index) {
+      return labels.size() <= index || (
+        labels[index] is string
+        && labels[index].size() > 0
+        && labels[index].size() <= 48
+        && labels[index].matches('.*\\S.*')
+      );
+    }
+
+    function isValidNotesLabels(labels) {
+      return labels is list
+        && labels.size() <= 12
+        && labels.toSet().size() == labels.size()
+        && isValidNotesLabelAt(labels, 0)
+        && isValidNotesLabelAt(labels, 1)
+        && isValidNotesLabelAt(labels, 2)
+        && isValidNotesLabelAt(labels, 3)
+        && isValidNotesLabelAt(labels, 4)
+        && isValidNotesLabelAt(labels, 5)
+        && isValidNotesLabelAt(labels, 6)
+        && isValidNotesLabelAt(labels, 7)
+        && isValidNotesLabelAt(labels, 8)
+        && isValidNotesLabelAt(labels, 9)
+        && isValidNotesLabelAt(labels, 10)
+        && isValidNotesLabelAt(labels, 11);
+    }
+
+    function hasNotesCreateTimestamps() {
+      return request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function hasNotesUpdateTimestamps() {
+      return request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    function isValidNotesNote(noteId) {
+      return request.resource.data.keys().hasAll([
+          'id', 'title', 'content', 'contentText', 'richBackup', 'format',
+          'folderId', 'labels', 'pinned', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'title', 'content', 'contentText', 'richBackup', 'format',
+          'folderId', 'labels', 'pinned', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.id == noteId
+        && isValidNotesId(request.resource.data.id)
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 240
+        && request.resource.data.content is string
+        && request.resource.data.content.size() <= 600000
+        && request.resource.data.contentText is string
+        && request.resource.data.contentText.size() <= 200000
+        && request.resource.data.richBackup is string
+        && request.resource.data.richBackup.size() <= 600000
+        && request.resource.data.content.size()
+          + request.resource.data.contentText.size()
+          + request.resource.data.richBackup.size() <= 850000
+        && request.resource.data.format in ['rich', 'plain']
+        && request.resource.data.folderId is string
+        && request.resource.data.folderId.size() <= 128
+        && (
+          request.resource.data.folderId.size() == 0
+          || isValidNotesId(request.resource.data.folderId)
+        )
+        && isValidNotesLabels(request.resource.data.labels)
+        && request.resource.data.pinned is bool
+        && request.resource.data.revision is int
+        && request.resource.data.revision >= 0
+        && request.resource.data.revision <= 2147483647;
+    }
+
+    function hasNotesCreateRevision() {
+      return request.resource.data.revision == 0;
+    }
+
+    function hasNotesUpdateRevision() {
+      return resource.data.revision is int
+        && request.resource.data.revision == resource.data.revision + 1;
+    }
+
+    function isValidNotesFolder(folderId) {
+      return request.resource.data.keys().hasAll([
+          'id', 'name', 'color', 'order', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'name', 'color', 'order', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.id == folderId
+        && isValidNotesId(request.resource.data.id)
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.name.matches('.*\\S.*')
+        && request.resource.data.color is string
+        && request.resource.data.color.size() > 0
+        && request.resource.data.color.size() <= 32
+        && request.resource.data.color.matches(
+          '^(#[A-Fa-f0-9]{6}|[a-z][a-z0-9-]{0,31})$'
+        )
+        && request.resource.data.order is int
+        && request.resource.data.order >= 0
+        && request.resource.data.order <= 10000;
+    }
+
+    function isValidNotesSettings(documentId) {
+      return documentId == 'current'
+        && request.resource.data.keys().hasAll([
+          'theme', 'smartFormatting', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'theme', 'smartFormatting', 'updatedAt'
+        ])
+        && request.resource.data.theme in ['system', 'light', 'dark']
+        && request.resource.data.smartFormatting is bool
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    match /notes_users/{userId} {
+      // Notes has no root document. Only these explicit, owner-scoped
+      // subcollections are readable or writable.
+      match /notes/{noteId} {
+        allow read: if ownsNotesData(userId);
+        allow create: if ownsNotesData(userId)
+          && isValidNotesNote(noteId)
+          && hasNotesCreateRevision()
+          && hasNotesCreateTimestamps();
+        allow update: if ownsNotesData(userId)
+          && isValidNotesNote(noteId)
+          && hasNotesUpdateRevision()
+          && hasNotesUpdateTimestamps();
+      }
+
+      match /folders/{folderId} {
+        allow read: if ownsNotesData(userId);
+        allow create: if ownsNotesData(userId)
+          && isValidNotesFolder(folderId)
+          && hasNotesCreateTimestamps();
+        allow update: if ownsNotesData(userId)
+          && isValidNotesFolder(folderId)
+          && hasNotesUpdateTimestamps();
+      }
+
+      match /settings/{documentId} {
+        allow read: if ownsNotesData(userId) && documentId == 'current';
+        allow create, update: if ownsNotesData(userId)
+          && isValidNotesSettings(documentId);
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
