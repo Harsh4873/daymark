@@ -3,7 +3,7 @@
   "short_name": "Daymark",
   "description": "A quiet record of showing up. Private, local-first habit tracking.",
   "id": "/daymark/",
-  "start_url": "/daymark/",
+  "start_url": "/daymark/#daily",
   "scope": "/daymark/",
   "display": "standalone",
   "orientation": "portrait-primary",

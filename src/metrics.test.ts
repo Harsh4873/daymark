@@ -192,6 +192,8 @@ describe('period-aware streaks', () => {
   });
 
   it('counts weekly goals as weekly streaks and leaves an open week unpenalized', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-13'));
     const testHabit = habit({ metric: 'check', target: 2, unit: 'sessions', period: 'week', increment: 1, startDate: '2026-06-29' });
     const state = tracker(testHabit, {
       '2026-06-29': { [testHabit.id]: entry(1) },
@@ -214,6 +216,8 @@ describe('period-aware streaks', () => {
   });
 
   it('lets a mid-week create collect activity without later counting as a miss', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-13'));
     // Week of Jun 29–Jul 5 is shortened; next full week is complete.
     const testHabit = habit({
       metric: 'check',
@@ -242,6 +246,8 @@ describe('period-aware streaks', () => {
   });
 
   it('lets a mid-month pause keep logged activity without turning the month into a miss', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-05'));
     const testHabit = habit({
       metric: 'check',
       target: 3,
