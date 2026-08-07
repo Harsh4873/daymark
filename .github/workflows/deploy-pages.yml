@@ -42,6 +42,18 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Install Firebase CLI for rule tests
+        run: npm install --global firebase-tools@15.14.0
+
+      - name: Set up Java for Firestore emulator
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Test Firestore security rules
+        run: npm run test:rules
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -10,7 +10,7 @@ import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { afterAll, afterEach, beforeAll, describe, it } from 'vitest';
 
 const PROJECT_ID = 'demo-daymark';
-const ALLOWED_EMAIL = 'hdav4873@gmail.com';
+const TEST_EMAIL = 'user.one@example.com';
 const OWNER_UID = 'daymark-owner';
 const EMULATOR_ADDRESS = process.env.FIRESTORE_EMULATOR_HOST;
 
@@ -20,7 +20,7 @@ function authorizedContext(
   overrides: Record<string, unknown> = {},
 ): RulesTestContext {
   return testEnvironment.authenticatedContext(uid, {
-    email: ALLOWED_EMAIL,
+    email: TEST_EMAIL,
     email_verified: true,
     firebase: { sign_in_provider: 'google.com' },
     ...overrides,
@@ -125,15 +125,21 @@ describe.skipIf(!EMULATOR_ADDRESS)('Daymark Firestore security rules', () => {
     );
   });
 
-  it('denies the owner UID when the email is not the approved account', async () => {
-    const firestore = authorizedContext(testEnvironment, OWNER_UID, {
+  it('allows another verified Google account to use its own UID-scoped workspace', async () => {
+    const secondUid = 'second-daymark-user';
+    const firestore = authorizedContext(testEnvironment, secondUid, {
       email: 'someone-else@example.com',
     }).firestore();
 
-    await assertFails(getDoc(doc(firestore, 'daymark_users', OWNER_UID)));
+    const root = doc(firestore, 'daymark_users', secondUid);
+    await assertSucceeds(setDoc(root, {
+      generationId: 'generation-2',
+      profileGenerationId: 'generation-2',
+    }));
+    await assertSucceeds(getDoc(root));
   });
 
-  it('denies an unverified approved email', async () => {
+  it('denies an unverified email', async () => {
     const firestore = authorizedContext(testEnvironment, OWNER_UID, {
       email_verified: false,
     }).firestore();
@@ -145,7 +151,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Daymark Firestore security rules', () => {
     );
   });
 
-  it('denies the approved email when it did not sign in with Google', async () => {
+  it('denies an email when it did not sign in with Google', async () => {
     const firestore = authorizedContext(testEnvironment, OWNER_UID, {
       firebase: { sign_in_provider: 'password' },
     }).firestore();
@@ -159,7 +165,7 @@ describe.skipIf(!EMULATOR_ADDRESS)('Daymark Firestore security rules', () => {
     const legacyPick = doc(firestore, 'picks', 'pick-1');
 
     await assertFails(getDoc(legacyUser));
-    await assertFails(setDoc(legacyUser, { email: ALLOWED_EMAIL }));
+    await assertFails(setDoc(legacyUser, { email: TEST_EMAIL }));
     await assertFails(getDoc(legacyPick));
     await assertFails(setDoc(legacyPick, { result: 'win' }));
   });

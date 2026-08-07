@@ -27,7 +27,6 @@ export const authPersistenceReady = setPersistence(firebaseAuth, browserLocalPer
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({
-  login_hint: 'hdav4873@gmail.com',
   prompt: 'select_account',
 });
 

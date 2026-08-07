@@ -20,9 +20,9 @@ Daymark is the private, local-first habit app published at `harsh.bet/daymark/`.
 
 ## Sync and privacy
 
-Google sign-in is restricted to the verified `hdav4873@gmail.com` account. Authentication persists on each device until explicit sign-out, so the normal experience remains automatic after signing in once.
+Any verified Google account can sign in. Firestore isolates each account under its Authentication UID, so users cannot read or write one another's data. Authentication persists on each device until explicit sign-out, so the normal experience remains automatic after signing in once.
 
-Firestore data is isolated under `daymark_users/{uid}` with separate habit and entry documents. This keeps unrelated check-ins from overwriting one another, while a generation ID makes reset and JSON-import replacements propagate cleanly. The combined Firestore rules preserve Slate's `slate_users/{uid}`, Fare's `fare_users/{uid}`, and Sift's `research_users/{uid}` namespaces while denying signed-out users, other accounts, mismatched UIDs, and every unrelated collection. The rules file must stay identical across the Daymark, Slate, Fare, and Research repositories. Firebase Analytics is not enabled.
+Firestore data is isolated under `daymark_users/{uid}` with separate habit and entry documents. This keeps unrelated check-ins from overwriting one another, while a generation ID makes reset and JSON-import replacements propagate cleanly. The combined Firestore rules preserve every Gym, Daymark, Slate, Fare, Notes, Sift, and Recall namespace while denying signed-out users, mismatched UIDs, and every unrelated collection. The rules file must stay byte-identical across all six app repositories. Firebase Analytics is not enabled.
 
 The browser mirror remains the first read and write path for instant startup and offline use. Cloud sync aligns devices; JSON export remains the portable backup the user controls. Signing out waits for pending writes, then removes Daymark's local copy from that device.
 
@@ -37,7 +37,7 @@ npm run build
 
 Vite's public base is `/daymark/`. Navigation is hash-based so every view remains safe on GitHub Pages without a server rewrite.
 
-The Pages workflow deploys only the built website. When intentionally updating the shared backend, deploy the combined Daymark + Slate + Fare + Sift Firestore rules separately with:
+The Pages workflow deploys only the built website. When intentionally updating the shared backend, deploy the complete shared Firestore rules separately with:
 
 ```sh
 firebase deploy --only firestore:rules --project pickledgerpro

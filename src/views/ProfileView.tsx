@@ -544,7 +544,7 @@ export function ProfileView({
               {authAction === 'sign-in' ? 'Opening Google…' : 'Sign in with Google'}
             </button>
           )}
-          <small>{sync.user ? 'Pending writes finish before local data is removed.' : 'Restricted to hdav4873@gmail.com'}</small>
+          <small>{sync.user ? 'Pending writes finish before local data is removed.' : 'Each Google account gets a private synced workspace.'}</small>
         </div>
       </section>
 

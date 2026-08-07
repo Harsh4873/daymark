@@ -47,7 +47,6 @@ import {
 } from './sync-core';
 import { parseTrackerState, type TrackerMutation, type TrackerStore } from './store';
 
-const ALLOWED_EMAIL = 'hdav4873@gmail.com';
 const WRITE_BATCH_SIZE = 450;
 
 export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'action-needed';
@@ -542,9 +541,9 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         setMessage(navigator.onLine ? 'Sign in once on this device to turn on automatic sync.' : 'You are offline. Local tracking is still available.');
         return;
       }
-      if (authUser.email?.toLowerCase() !== ALLOWED_EMAIL || !authUser.emailVerified) {
+      if (!authUser.emailVerified) {
         setStatus('action-needed');
-        setMessage(`Daymark only allows ${ALLOWED_EMAIL}.`);
+        setMessage('Use a verified Google account to sync Daymark.');
         void firebaseSignOut(firebaseAuth);
         return;
       }
@@ -599,9 +598,9 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     try {
       await authPersistenceReady;
       const result = await signInWithPopup(firebaseAuth, googleProvider);
-      if (result.user.email?.toLowerCase() !== ALLOWED_EMAIL || !result.user.emailVerified) {
+      if (!result.user.emailVerified) {
         await firebaseSignOut(firebaseAuth);
-        throw new Error(`Daymark only allows ${ALLOWED_EMAIL}.`);
+        throw new Error('Use a verified Google account to sync Daymark.');
       }
     } catch (error) {
       setStatus('action-needed');
