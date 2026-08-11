@@ -338,10 +338,19 @@ export function isUntouchedStarterHabit(habit: Habit) {
   );
 }
 
+/**
+ * `system` is the current default and `dark` is the one devices installed
+ * before the theme followed the OS carry, so neither counts as a choice the
+ * owner made.
+ */
+function isDefaultThemePreference(theme: TrackerProfile['theme']) {
+  return theme === 'system' || theme === 'dark';
+}
+
 export function isDefaultTrackerProfile(profile: TrackerProfile) {
   return profile.displayName === DEFAULT_DISPLAY_NAME
     && profile.weekStartsOn === 1
-    && profile.theme === 'dark'
+    && isDefaultThemePreference(profile.theme)
     && profile.lastBackupAt === undefined;
 }
 
@@ -352,7 +361,7 @@ export function isMeaningfulLocalState(state: TrackerState) {
   if (
     state.profile.displayName !== DEFAULT_DISPLAY_NAME
     || state.profile.weekStartsOn !== 1
-    || state.profile.theme !== 'dark'
+    || !isDefaultThemePreference(state.profile.theme)
   ) {
     return true;
   }
@@ -481,15 +490,153 @@ export function createReplacementGeneration(
   };
 }
 
+function isSameEntity(left: unknown, right: unknown) {
+  return stableStringify(left) === stableStringify(right);
+}
+
+export interface UnsyncedLocalWork {
+  /** Entries this device holds that accepting the cloud generation would drop. */
+  entries: Array<{ date: string; habitId: string }>;
+  habitIds: string[];
+  profileChanged: boolean;
+}
+
+/**
+ * Local work the cloud generation does not already contain. An entry counts as
+ * unsynced when the cloud has nothing at that habit/date, or when the two
+ * differ and this device holds the newer write — exactly the values that would
+ * disappear if the cloud state replaced the local one.
+ */
+export function findUnsyncedLocalWork(local: TrackerState, cloud: TrackerState): UnsyncedLocalWork {
+  const entries: UnsyncedLocalWork['entries'] = [];
+  for (const date of Object.keys(local.entries).sort(compareLexical)) {
+    for (const habitId of Object.keys(local.entries[date]).sort(compareLexical)) {
+      const localEntry = local.entries[date][habitId];
+      const cloudEntry = cloud.entries[date]?.[habitId];
+      if (cloudEntry && (isSameEntity(localEntry, cloudEntry) || selectNewerEntity(localEntry, cloudEntry) !== localEntry)) {
+        continue;
+      }
+      entries.push({ date, habitId });
+    }
+  }
+
+  const cloudHabits = new Map(cloud.habits.map((habit) => [habit.id, habit]));
+  const habitIds = local.habits
+    .filter((habit) => {
+      const cloudHabit = cloudHabits.get(habit.id);
+      if (!cloudHabit) return true;
+      return !isSameEntity(habit, cloudHabit) && selectNewerEntity(habit, cloudHabit) === habit;
+    })
+    .map((habit) => habit.id);
+
+  const profileChanged = !isSameEntity(local.profile, cloud.profile)
+    && selectNewerEntity(local.profile, cloud.profile) === local.profile;
+
+  return { entries, habitIds, profileChanged };
+}
+
+export function hasUnsyncedLocalWork(work: UnsyncedLocalWork) {
+  return work.entries.length > 0 || work.habitIds.length > 0 || work.profileChanged;
+}
+
+export interface GenerationConflict {
+  localGenerationId: string;
+  localGenerationUpdatedAt: string;
+  cloudGenerationId: string;
+  cloudGenerationUpdatedAt: string;
+  unsyncedEntryCount: number;
+  unsyncedHabitCount: number;
+  unsyncedProfile: boolean;
+  earliestUnsyncedDate?: string;
+  latestUnsyncedDate?: string;
+}
+
+export function describeGenerationConflict(
+  local: TrackerState,
+  cloud: TrackerState,
+  work: UnsyncedLocalWork = findUnsyncedLocalWork(local, cloud),
+): GenerationConflict {
+  const dates = work.entries.map((entry) => entry.date).sort(compareLexical);
+  return {
+    localGenerationId: local.generationId,
+    localGenerationUpdatedAt: local.generationUpdatedAt,
+    cloudGenerationId: cloud.generationId,
+    cloudGenerationUpdatedAt: cloud.generationUpdatedAt,
+    unsyncedEntryCount: work.entries.length,
+    unsyncedHabitCount: work.habitIds.length,
+    unsyncedProfile: work.profileChanged,
+    earliestUnsyncedDate: dates[0],
+    latestUnsyncedDate: dates[dates.length - 1],
+  };
+}
+
+/**
+ * Folds this device's record into the cloud generation. Entries are keyed by
+ * habit and date and habits by id, so the union is well defined: every key
+ * present on one side survives and a key present on both resolves to the newer
+ * write. Nothing is dropped, which is why this is only ever reached through an
+ * explicit "keep both" choice.
+ */
+export function mergeAcrossGenerations(local: TrackerState, cloud: TrackerState): TrackerState {
+  const adopted = adoptGeneration(local, cloud.generationId, cloud.generationUpdatedAt, false);
+  return { ...mergeSameGeneration(adopted, cloud), generationPending: false };
+}
+
+export type GenerationConflictChoice = 'keep-both' | 'use-cloud' | 'use-local';
+
+export interface GenerationConflictResolution {
+  mode: 'merge-generations' | 'accept-cloud-generation' | 'accept-local-generation';
+  state: TrackerState;
+  shouldWriteCloud: boolean;
+  /** `delta` writes only what the cloud is missing; `full` republishes a generation. */
+  writeMode: 'none' | 'delta' | 'full';
+}
+
+/** Applies the owner's answer to a generation conflict. */
+export function resolveGenerationConflict(
+  local: TrackerState,
+  cloud: TrackerState,
+  choice: GenerationConflictChoice,
+  options: { now?: string } = {},
+): GenerationConflictResolution {
+  if (choice === 'use-cloud') {
+    return { mode: 'accept-cloud-generation', state: cloud, shouldWriteCloud: false, writeMode: 'none' };
+  }
+
+  if (choice === 'use-local') {
+    return {
+      mode: 'accept-local-generation',
+      state: adoptGeneration(
+        local,
+        local.generationId,
+        options.now ?? new Date().toISOString(),
+        false,
+      ),
+      shouldWriteCloud: true,
+      writeMode: 'full',
+    };
+  }
+
+  return {
+    mode: 'merge-generations',
+    state: mergeAcrossGenerations(local, cloud),
+    shouldWriteCloud: true,
+    writeMode: 'delta',
+  };
+}
+
 export type InitialSyncResolution = {
   mode:
     | 'upload-local'
     | 'hydrate-cloud'
     | 'merge'
     | 'accept-local-generation'
-    | 'accept-cloud-generation';
+    | 'accept-cloud-generation'
+    | 'conflict';
   state: TrackerState;
   shouldWriteCloud: boolean;
+  /** Present only for `conflict`, where the owner has to pick an outcome. */
+  conflict?: GenerationConflict;
 };
 
 interface InitialSyncOptions {
@@ -499,7 +646,10 @@ interface InitialSyncOptions {
 
 /**
  * Resolves first contact with Firestore. A legacy local generation is allowed
- * to merge once; two real, different generations are never entity-merged.
+ * to merge once; two real, different generations are never entity-merged
+ * automatically. When they disagree and this device still holds work the cloud
+ * generation lacks, the resolution is `conflict`: the local state is returned
+ * untouched, nothing is written, and the owner chooses the outcome.
  */
 export function resolveInitialSync(
   local: TrackerState,
@@ -553,6 +703,19 @@ export function resolveInitialSync(
       mode: 'accept-local-generation',
       state: local,
       shouldWriteCloud: true,
+    };
+  }
+
+  // Two real generations. Taking the cloud one wholesale is only safe when this
+  // device has nothing the cloud generation is missing; otherwise every local
+  // write made since the generations split would be destroyed silently.
+  const work = findUnsyncedLocalWork(local, cloud);
+  if (hasUnsyncedLocalWork(work)) {
+    return {
+      mode: 'conflict',
+      state: local,
+      shouldWriteCloud: false,
+      conflict: describeGenerationConflict(local, cloud, work),
     };
   }
 

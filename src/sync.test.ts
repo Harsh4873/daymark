@@ -6,11 +6,15 @@ import {
   LEGACY_GENERATION_UPDATED_AT,
   entryDocumentId,
   createReplacementGeneration,
+  findUnsyncedLocalWork,
   habitDocumentId,
+  hasUnsyncedLocalWork,
   isMeaningfulLocalState,
   materializeCloudState,
+  mergeAcrossGenerations,
   mergeSameGeneration,
   normalizeLegacyV1State,
+  resolveGenerationConflict,
   resolveInitialSync,
   serializeEntryDocument,
   serializeHabitDocument,
@@ -126,6 +130,15 @@ describe('first sync resolution', () => {
     expect(resolution.mode).toBe('hydrate-cloud');
     expect(resolution.shouldWriteCloud).toBe(false);
     expect(resolution.state).toBe(cloud);
+  });
+
+  it('treats the device-following theme as an unset preference, not an edit to upload', () => {
+    const fresh = createInitialState({ now: later });
+    expect(fresh.profile.theme).toBe('system');
+    expect(isMeaningfulLocalState(fresh)).toBe(false);
+
+    const chosen: TrackerState = { ...fresh, profile: { ...fresh.profile, theme: 'light' } };
+    expect(isMeaningfulLocalState(chosen)).toBe(true);
   });
 
   it('treats a start-date-only habit edit as meaningful', () => {
@@ -245,6 +258,191 @@ describe('entity merge', () => {
     expect(replacement.entries).toEqual(imported.entries);
     expect(replacement.profile.updatedAt).toBe(later);
     expect(replacement.habits.every((habit) => habit.updatedAt === later)).toBe(true);
+  });
+});
+
+describe('two real generations', () => {
+  const WEEK = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06', '2026-07-07'];
+  const OFFLINE_HABITS = ['starter-steps', 'starter-read'];
+
+  /** The laptop: last synced before the reset, then a week logged offline. */
+  function laptopWithOfflineWeek() {
+    const laptop = state('generation-before-reset');
+    WEEK.forEach((date, index) => {
+      laptop.entries[date] = {
+        'starter-steps': loggedEntry(9000 + index * 100, latest),
+        'starter-read': loggedEntry(20 + index, latest),
+      };
+    });
+    return laptop;
+  }
+
+  /** The phone: reset the tracker, so the cloud is an empty new generation. */
+  function cloudAfterReset() {
+    return createInitialState({
+      generationId: 'generation-after-reset',
+      generationUpdatedAt: later,
+      now: later,
+    });
+  }
+
+  function entryCount(tracker: TrackerState) {
+    return Object.values(tracker.entries).reduce((total, day) => total + Object.keys(day).length, 0);
+  }
+
+  it('refuses to resolve a generation split on its own while the laptop holds an unsynced week', () => {
+    const laptop = laptopWithOfflineWeek();
+    const cloud = cloudAfterReset();
+
+    const resolution = resolveInitialSync(laptop, cloud);
+
+    expect(resolution.mode).toBe('conflict');
+    expect(resolution.shouldWriteCloud).toBe(false);
+    // The week is still here: the local state is handed back untouched.
+    expect(resolution.state).toBe(laptop);
+    expect(entryCount(resolution.state)).toBe(14);
+    expect(resolution.conflict).toMatchObject({
+      localGenerationId: 'generation-before-reset',
+      cloudGenerationId: 'generation-after-reset',
+      unsyncedEntryCount: 14,
+      unsyncedHabitCount: 4,
+      earliestUnsyncedDate: '2026-07-01',
+      latestUnsyncedDate: '2026-07-07',
+    });
+  });
+
+  it('never drops an entry through the automatic path, whichever generation is newer', () => {
+    const laptop = laptopWithOfflineWeek();
+
+    for (const cloudGenerationUpdatedAt of [earlier, later, latest]) {
+      const cloud = { ...cloudAfterReset(), generationUpdatedAt: cloudGenerationUpdatedAt };
+      const resolution = resolveInitialSync(laptop, cloud);
+
+      expect(resolution.mode).toBe('conflict');
+      expect(entryCount(resolution.state)).toBe(14);
+      for (const date of WEEK) {
+        for (const habitId of OFFLINE_HABITS) {
+          expect(resolution.state.entries[date][habitId]).toEqual(laptop.entries[date][habitId]);
+        }
+      }
+    }
+  });
+
+  it('keeps every offline entry and uploads it when the owner keeps both records', () => {
+    const laptop = laptopWithOfflineWeek();
+    const cloud = cloudAfterReset();
+
+    const resolution = resolveGenerationConflict(laptop, cloud, 'keep-both', { now: latest });
+
+    expect(resolution.mode).toBe('merge-generations');
+    expect(resolution.shouldWriteCloud).toBe(true);
+    expect(resolution.writeMode).toBe('delta');
+    expect(resolution.state.generationId).toBe('generation-after-reset');
+    expect(resolution.state.generationPending).toBe(false);
+    expect(entryCount(resolution.state)).toBe(14);
+    for (const date of WEEK) {
+      for (const habitId of OFFLINE_HABITS) {
+        expect(resolution.state.entries[date][habitId]).toEqual(laptop.entries[date][habitId]);
+      }
+    }
+    // Habits come along, so the merged record is internally consistent and the
+    // store accepts it instead of rejecting entries for unknown habits.
+    expect(resolution.state.habits.map((habit) => habit.id)).toEqual(laptop.habits.map((habit) => habit.id));
+    expect(() => parseTrackerState(resolution.state)).not.toThrow();
+
+    // And the same 14 entries are actually written to the cloud generation.
+    const delta = serializeTrackerDelta(cloud, resolution.state);
+    expect(delta.entries).toHaveLength(14);
+    expect(delta.entries.map((document) => document.id).sort()).toEqual(
+      WEEK.flatMap((date) => OFFLINE_HABITS.map((habitId) => (
+        entryDocumentId('generation-after-reset', date, habitId)
+      ))).sort(),
+    );
+    expect(delta.habits).toHaveLength(4);
+  });
+
+  it('resolves an overlapping entry by recency instead of by which side is cloud', () => {
+    const laptop = laptopWithOfflineWeek();
+    const cloud = cloudAfterReset();
+    cloud.habits = laptop.habits.map((habit) => ({ ...habit }));
+    cloud.entries['2026-07-01'] = { 'starter-steps': loggedEntry(1, later) };
+    cloud.entries['2026-07-09'] = { 'starter-read': loggedEntry(45, later) };
+
+    const merged = mergeAcrossGenerations(laptop, cloud);
+
+    // Laptop wrote later, so its value wins; the phone-only day survives too.
+    expect(merged.entries['2026-07-01']['starter-steps'].value).toBe(9000);
+    expect(merged.entries['2026-07-09']['starter-read'].value).toBe(45);
+    expect(entryCount(merged)).toBe(15);
+  });
+
+  it('discards the local week only through an explicit choice', () => {
+    const laptop = laptopWithOfflineWeek();
+    const cloud = cloudAfterReset();
+
+    const useCloud = resolveGenerationConflict(laptop, cloud, 'use-cloud');
+    expect(useCloud.mode).toBe('accept-cloud-generation');
+    expect(useCloud.state).toBe(cloud);
+    expect(useCloud.shouldWriteCloud).toBe(false);
+
+    const useLocal = resolveGenerationConflict(laptop, cloud, 'use-local', { now: latest });
+    expect(useLocal.mode).toBe('accept-local-generation');
+    expect(useLocal.state.generationId).toBe('generation-before-reset');
+    expect(useLocal.state.generationUpdatedAt).toBe(latest);
+    expect(useLocal.writeMode).toBe('full');
+    expect(entryCount(useLocal.state)).toBe(14);
+  });
+
+  it('still adopts a new cloud generation silently when this device has nothing to lose', () => {
+    const laptop = state('generation-before-reset');
+    const cloud = cloudAfterReset();
+    cloud.habits = laptop.habits.map((habit) => ({ ...habit }));
+
+    const work = findUnsyncedLocalWork(laptop, cloud);
+    expect(hasUnsyncedLocalWork(work)).toBe(false);
+
+    const resolution = resolveInitialSync(laptop, cloud);
+    expect(resolution.mode).toBe('accept-cloud-generation');
+    expect(resolution.state).toBe(cloud);
+  });
+
+  it('counts only work the cloud generation is actually missing', () => {
+    const laptop = state('generation-before-reset');
+    const cloud = cloudAfterReset();
+    cloud.habits = laptop.habits.map((habit) => ({ ...habit }));
+    laptop.entries['2026-07-01'] = {
+      'starter-steps': loggedEntry(10, earlier),
+      'starter-read': loggedEntry(20, latest),
+    };
+    cloud.entries['2026-07-01'] = {
+      // Newer on the phone: nothing is lost by taking the cloud copy.
+      'starter-steps': loggedEntry(11, latest),
+      // Older on the phone: the laptop write would be destroyed.
+      'starter-read': loggedEntry(21, earlier),
+    };
+
+    const work = findUnsyncedLocalWork(laptop, cloud);
+
+    expect(work.entries).toEqual([{ date: '2026-07-01', habitId: 'starter-read' }]);
+    expect(work.habitIds).toEqual([]);
+    expect(work.profileChanged).toBe(false);
+    expect(hasUnsyncedLocalWork(work)).toBe(true);
+  });
+
+  it('keeps a pending local reset authoritative instead of raising a conflict', () => {
+    const oldCloud = state('generation-old');
+    oldCloud.entries['2026-07-01'] = { 'starter-read': loggedEntry(99, later) };
+    const resetLocal = createInitialState({
+      generationId: 'generation-reset',
+      generationUpdatedAt: later,
+      generationPending: true,
+      now: later,
+    });
+
+    const resolution = resolveInitialSync(resetLocal, oldCloud);
+
+    expect(resolution.mode).toBe('accept-local-generation');
+    expect(resolution.shouldWriteCloud).toBe(true);
   });
 });
 

@@ -21,6 +21,24 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/daymark/apple-touch-icon.png" />
     <link rel="manifest" href="/daymark/manifest.webmanifest" />
     <title>Daymark</title>
+    <script>
+      // Same resolver as the harsh.bet landing page, on Daymark's own key: an
+      // explicit Dark/Light choice wins, and no stored choice follows the OS.
+      // Runs before paint because the tracker state loads asynchronously.
+      (() => {
+        try {
+          const savedTheme = localStorage.getItem('daymark-theme');
+          const theme = savedTheme === 'light' || savedTheme === 'dark'
+            ? savedTheme
+            : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          document.documentElement.dataset.theme = theme;
+          document.querySelector('meta[name="theme-color"]')
+            ?.setAttribute('content', theme === 'light' ? '#f2f3ed' : '#101311');
+        } catch {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

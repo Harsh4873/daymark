@@ -159,7 +159,8 @@ export function createInitialState(options: InitialStateOptions = {}): TrackerSt
     profile: {
       displayName: DEFAULT_DISPLAY_NAME,
       weekStartsOn: 1,
-      theme: 'dark',
+      // Until the owner picks Dark or Light, Daymark follows the device.
+      theme: 'system',
       updatedAt: entityUpdatedAt,
     },
     habits: [],

@@ -38,7 +38,7 @@ import {
 } from '../model';
 import { parseTrackerState, type TrackerStore } from '../store';
 import { HabitBadge, ProgressBar, ViewHeader, habitStyle, useModalDialog } from '../ui';
-import type { DaymarkSync, SyncStatus } from '../useDaymarkSync';
+import type { DaymarkSync, GenerationConflictChoice, SyncStatus } from '../useDaymarkSync';
 
 interface ProfileViewProps {
   state: TrackerState;
@@ -400,6 +400,26 @@ function stateToCsv(state: TrackerState) {
   return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 }
 
+function countLabel(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function describeUnsyncedWork(conflict: NonNullable<DaymarkSync['conflict']>) {
+  const parts: string[] = [];
+  if (conflict.unsyncedEntryCount > 0) parts.push(countLabel(conflict.unsyncedEntryCount, 'entry', 'entries'));
+  if (conflict.unsyncedHabitCount > 0) parts.push(countLabel(conflict.unsyncedHabitCount, 'habit', 'habits'));
+  if (parts.length === 0 && conflict.unsyncedProfile) parts.push('a settings change');
+  if (parts.length === 0) return 'unsynced changes';
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+}
+
+function describeUnsyncedSpan(conflict: NonNullable<DaymarkSync['conflict']>) {
+  if (!conflict.earliestUnsyncedDate) return '';
+  return conflict.earliestUnsyncedDate === conflict.latestUnsyncedDate
+    ? ` recorded on ${conflict.earliestUnsyncedDate}`
+    : ` recorded between ${conflict.earliestUnsyncedDate} and ${conflict.latestUnsyncedDate}`;
+}
+
 function formatSyncTime(value?: string) {
   if (!value) return 'Waiting for first sync';
   const date = new Date(value);
@@ -428,6 +448,7 @@ export function ProfileView({
   const [editor, setEditor] = useState<{ habit: Habit; locked: boolean } | null>(null);
   const [dataMessage, setDataMessage] = useState('');
   const [authAction, setAuthAction] = useState<'sign-in' | 'sign-out' | null>(null);
+  const [conflictChoice, setConflictChoice] = useState<GenerationConflictChoice | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const active = state.habits.filter((habit) => !habit.archivedAt);
   const archived = state.habits.filter((habit) => habit.archivedAt);
@@ -455,6 +476,24 @@ export function ProfileView({
       await sync.signOut();
     } finally {
       setAuthAction(null);
+    }
+  }
+
+  async function answerConflict(choice: GenerationConflictChoice) {
+    if (conflictChoice) return;
+    const conflict = sync.conflict;
+    if (!conflict) return;
+    if (choice !== 'keep-both') {
+      const discarded = choice === 'use-cloud'
+        ? `this device’s ${describeUnsyncedWork(conflict)}`
+        : 'the synced record from your other device';
+      if (!window.confirm(`Daymark will keep ${choice === 'use-cloud' ? 'the synced record' : 'this device’s record'} and drop ${discarded}. Export a backup first if you may want it later. Continue?`)) return;
+    }
+    setConflictChoice(choice);
+    try {
+      await sync.resolveConflict(choice);
+    } finally {
+      setConflictChoice(null);
     }
   }
 
@@ -547,6 +586,47 @@ export function ProfileView({
           <small>{sync.user ? 'Pending writes finish before local data is removed.' : 'Each Google account gets a private synced workspace.'}</small>
         </div>
       </section>
+
+      {sync.conflict && (
+        <section className="panel sync-conflict-panel" aria-labelledby="profile-conflict-title">
+          <div className="panel-heading compact">
+            <div>
+              <span>Sync paused</span>
+              <h2 id="profile-conflict-title">Two records to reconcile</h2>
+            </div>
+            <span className="sync-state-pill sync-state-action-needed"><CircleAlert aria-hidden="true" /> Your choice</span>
+          </div>
+          <p className="sync-conflict-summary">
+            The synced record was replaced on another device (a reset or an import) on {formatSyncTime(sync.conflict.cloudGenerationUpdatedAt)}.
+            {' '}This device still holds {describeUnsyncedWork(sync.conflict)}{describeUnsyncedSpan(sync.conflict)} that the synced record does not contain.
+            {' '}Nothing has been deleted. Daymark keeps this device’s copy and pauses sync until you pick an outcome.
+          </p>
+          <div className="sync-conflict-options">
+            <div>
+              <button type="button" className="button button-primary" onClick={() => void answerConflict('keep-both')} disabled={conflictChoice !== null}>
+                {conflictChoice === 'keep-both' ? <LoaderCircle className="spin" aria-hidden="true" /> : <Check aria-hidden="true" />}
+                Keep everything
+              </button>
+              <small>Folds this device’s entries and habits into the synced record. Entries kept per habit and date; the newer edit wins on any overlap.</small>
+            </div>
+            <div>
+              <button type="button" className="button button-secondary" onClick={() => void answerConflict('use-cloud')} disabled={conflictChoice !== null}>
+                {conflictChoice === 'use-cloud' ? <LoaderCircle className="spin" aria-hidden="true" /> : <Cloud aria-hidden="true" />}
+                Use the synced record
+              </button>
+              <small>Accepts the other device’s reset and drops this device’s {describeUnsyncedWork(sync.conflict)}.</small>
+            </div>
+            <div>
+              <button type="button" className="button button-secondary" onClick={() => void answerConflict('use-local')} disabled={conflictChoice !== null}>
+                {conflictChoice === 'use-local' ? <LoaderCircle className="spin" aria-hidden="true" /> : <Database aria-hidden="true" />}
+                Keep this device’s record
+              </button>
+              <small>Publishes this device’s record to every signed-in device and replaces the reset.</small>
+            </div>
+          </div>
+          <small className="sync-conflict-footnote">Export a backup below first if you want a copy of this device’s record before choosing.</small>
+        </section>
+      )}
 
       <section className="panel settings-panel">
         <div className="panel-heading compact"><div><span>Preferences</span><h2>Settings</h2></div></div>

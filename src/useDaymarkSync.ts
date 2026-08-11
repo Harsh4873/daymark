@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -33,8 +34,12 @@ import { createInitialState, makeGenerationId, type TrackerState } from './model
 import { finishSafeSignOut } from './signout';
 import {
   LEGACY_LOCAL_GENERATION_ID,
+  describeGenerationConflict,
+  findUnsyncedLocalWork,
+  hasUnsyncedLocalWork,
   materializeCloudState,
   mergeSameGeneration,
+  resolveGenerationConflict,
   resolveInitialSync,
   serializeEntryDocument,
   serializeHabitDocument,
@@ -44,6 +49,8 @@ import {
   type CloudEntryDocument,
   type CloudHabitDocument,
   type CloudUserDocument,
+  type GenerationConflict,
+  type GenerationConflictChoice,
 } from './sync-core';
 import { parseTrackerState, type TrackerMutation, type TrackerStore } from './store';
 
@@ -51,13 +58,71 @@ const WRITE_BATCH_SIZE = 450;
 
 export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'action-needed';
 
+export type { GenerationConflict, GenerationConflictChoice } from './sync-core';
+
 export interface DaymarkSync {
   status: SyncStatus;
   user: User | null;
   lastSyncedAt?: string;
   message?: string;
+  /** Set while a generation split is waiting on the owner. Never auto-resolved. */
+  conflict: GenerationConflict | null;
+  resolveConflict: (choice: GenerationConflictChoice) => Promise<void>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
+}
+
+const UNVERIFIED_ACCOUNT_MESSAGE = 'Use a verified Google account to sync Daymark.';
+const NON_GOOGLE_ACCOUNT_MESSAGE = 'Daymark only syncs accounts signed in with Google. Sign in again with the Google button.';
+
+/**
+ * Mirrors the shared Firestore rules, which require a verified email *and*
+ * `sign_in_provider == 'google.com'`. Checking only `emailVerified` let a
+ * non-Google session through and turned every read into a raw permission
+ * error. The provider claim needs a token, so a session that cannot be
+ * refreshed (offline) falls back to the linked providers rather than throwing
+ * the owner out.
+ */
+async function describeAccountEligibility(authUser: User): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (!authUser.email || !authUser.emailVerified) {
+    return { ok: false, message: UNVERIFIED_ACCOUNT_MESSAGE };
+  }
+
+  let signInProvider: string | null = null;
+  try {
+    signInProvider = (await authUser.getIdTokenResult()).signInProvider ?? null;
+  } catch {
+    signInProvider = null;
+  }
+
+  const linkedToGoogle = authUser.providerData.some(
+    (provider) => provider.providerId === GoogleAuthProvider.PROVIDER_ID,
+  );
+  const isGoogleSession = signInProvider
+    ? signInProvider === GoogleAuthProvider.PROVIDER_ID
+    : linkedToGoogle;
+
+  return isGoogleSession ? { ok: true } : { ok: false, message: NON_GOOGLE_ACCOUNT_MESSAGE };
+}
+
+function countLabel(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function describeConflictMessage(conflict: GenerationConflict) {
+  const parts: string[] = [];
+  if (conflict.unsyncedEntryCount > 0) parts.push(countLabel(conflict.unsyncedEntryCount, 'entry', 'entries'));
+  if (conflict.unsyncedHabitCount > 0) parts.push(countLabel(conflict.unsyncedHabitCount, 'habit', 'habits'));
+  if (parts.length === 0 && conflict.unsyncedProfile) parts.push('a settings change');
+  const held = parts.length > 1
+    ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+    : parts[0] ?? 'changes';
+  const span = conflict.earliestUnsyncedDate
+    ? conflict.earliestUnsyncedDate === conflict.latestUnsyncedDate
+      ? ` from ${conflict.earliestUnsyncedDate}`
+      : ` from ${conflict.earliestUnsyncedDate} to ${conflict.latestUnsyncedDate}`
+    : '';
+  return `The synced record was replaced on another device. This device still holds ${held}${span} that the synced record does not have. Nothing was deleted — choose what to keep in Profile → Sync.`;
 }
 
 function timestampOrder(left: string, right: string) {
@@ -94,11 +159,13 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
   const [user, setUser] = useState<User | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const [conflict, setConflict] = useState<GenerationConflict | null>(null);
   const localStateRef = useRef(store.state);
   const activeUserRef = useRef<User | null>(null);
   const stopAllListenersRef = useRef<() => void>(() => undefined);
   const bootstrapActiveUserRef = useRef<() => void>(() => undefined);
   const otherTabsOpenRef = useRef<() => Promise<boolean>>(async () => false);
+  const resolveConflictRef = useRef<(choice: GenerationConflictChoice) => Promise<void>>(async () => undefined);
   localStateRef.current = store.state;
 
   useEffect(() => {
@@ -158,17 +225,43 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     let pendingGeneration: string | null = null;
     let bootstrapInFlight = false;
     let bootstrapSequence = 0;
+    let pendingConflict: { uid: string; cloud: TrackerState; summary: GenerationConflict } | null = null;
+    let blockedAccountMessage: string | null = null;
+    let rejectedWrite = false;
+    let lastRecoveryAt = 0;
 
     function showError(error: unknown) {
       if (disposed) return;
+      if (pendingConflict) {
+        showConflict();
+        return;
+      }
       const offline = !navigator.onLine
         || (typeof error === 'object' && error && 'code' in error && String(error.code).includes('unavailable'));
       setStatus(offline ? 'offline' : 'action-needed');
       setMessage(friendlySyncError(error));
     }
 
+    /** An unanswered conflict outranks every other status: work is still unsynced. */
+    function showConflict() {
+      if (disposed || !pendingConflict) return;
+      setStatus('action-needed');
+      setMessage(describeConflictMessage(pendingConflict.summary));
+    }
+
     function markSynced() {
       if (disposed) return;
+      if (pendingConflict) {
+        showConflict();
+        return;
+      }
+      // A rejected write means this device holds a change the cloud does not.
+      // Saying "Synced" here is the lie that hides lost work.
+      if (rejectedWrite) {
+        setStatus('action-needed');
+        setMessage('A change made on this device has not reached the cloud yet. Daymark keeps it here and retries on the next sync.');
+        return;
+      }
       const now = new Date().toISOString();
       setStatus(navigator.onLine ? 'synced' : 'offline');
       setLastSyncedAt(now);
@@ -177,6 +270,10 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
 
     function updateConnectionStatus() {
       if (disposed) return;
+      if (pendingConflict) {
+        showConflict();
+        return;
+      }
       if (!navigator.onLine) {
         setStatus('offline');
         setMessage('Changes are saved here and will sync automatically when this device reconnects.');
@@ -184,6 +281,18 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         setStatus('syncing');
         setMessage(undefined);
       }
+    }
+
+    /**
+     * Parks a generation split. The local state is left exactly as it is, no
+     * cloud write is queued, and listeners stop so nothing can overwrite this
+     * device before the owner answers.
+     */
+    function raiseConflict(uid: string, cloud: TrackerState, summary: GenerationConflict) {
+      stopAllListeners();
+      pendingConflict = { uid, cloud, summary };
+      setConflict(summary);
+      showConflict();
     }
 
     function stopDataListeners() {
@@ -222,9 +331,28 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         if (pendingWriteCount === 0) markSynced();
       }).catch((error) => {
         pendingWriteCount = Math.max(0, pendingWriteCount - 1);
+        rejectedWrite = true;
         showError(error);
         throw error;
       });
+    }
+
+    /**
+     * A rejected write is a change this device holds and the cloud does not.
+     * `permission-denied` on a Daymark write means the root moved to another
+     * generation, so re-resolve against the cloud: bootstrap replays the local
+     * change through the merge path, or parks a conflict for the owner. Rate
+     * limited so a genuinely unauthorised account cannot spin.
+     */
+    function recoverFromWriteRejection(error: unknown) {
+      const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
+      if (!code.includes('permission-denied')) return;
+      const authUser = activeUserRef.current;
+      const now = Date.now();
+      if (!authUser || now - lastRecoveryAt < 30_000) return;
+      lastRecoveryAt = now;
+      setMessage('The synced record changed on another device. Daymark is re-checking this device’s copy…');
+      void bootstrap(authUser);
     }
 
     async function queueFullStateWrite(uid: string, state: TrackerState) {
@@ -296,6 +424,17 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       const current = localStateRef.current;
       if (!current) return;
 
+      // A replacement generation is an answer to the conflict in itself: the
+      // owner imported or reset deliberately, and that state becomes cloud.
+      if (pendingConflict && mutation.type !== 'replace') {
+        showConflict();
+        return;
+      }
+      if (pendingConflict) {
+        pendingConflict = null;
+        setConflict(null);
+      }
+
       if (mutation.type === 'replace') {
         activeGeneration = mutation.state.generationId;
         pendingGeneration = mutation.state.generationId;
@@ -303,6 +442,12 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         void trackWrite(queueFullStateWrite(uid, mutation.state))
           .then(() => {
             const latest = localStateRef.current;
+            // Listeners are stopped while a conflict is parked; the replacement
+            // answered it, so bring them back on the published generation.
+            if (!rootUnsubscribe) {
+              startRootListener(uid);
+              startDataListeners(uid, serializeRootDocument(mutation.state));
+            }
             if (latest?.generationId !== mutation.state.generationId) return;
             const acknowledged = { ...latest, generationPending: false };
             localStateRef.current = acknowledged;
@@ -311,7 +456,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
           .finally(() => {
             if (pendingGeneration === mutation.state.generationId) pendingGeneration = null;
           })
-          .catch(() => undefined);
+          .catch(recoverFromWriteRejection);
         return;
       }
 
@@ -330,7 +475,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         void trackWrite(setDoc(
           doc(daymarkFirestore, 'daymark_users', uid, 'entries', serialized.id),
           serialized.data,
-        )).catch(() => undefined);
+        )).catch(recoverFromWriteRejection);
         return;
       }
 
@@ -340,16 +485,31 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
           const serialized = serializeHabitDocument(habit, current.generationId);
           batch.set(doc(daymarkFirestore, 'daymark_users', uid, 'habits', serialized.id), serialized.data);
         });
-        void trackWrite(batch.commit()).catch(() => undefined);
+        void trackWrite(batch.commit()).catch(recoverFromWriteRejection);
         return;
       }
 
-      const serializedRoot = serializeRootDocument(current);
+      queueProfileWrite(uid, current);
+    }
+
+    /**
+     * `hasConsistentGeneration()` in the shared rules compares the incoming
+     * `profileGenerationId` against the root's `generationId`, so this write
+     * carries the generation the edit was actually made on and lands only
+     * while that is still the published generation. Adding `generationId` to
+     * the payload would satisfy the rule the other way — by rewriting the
+     * root's generation pointer, letting a stale device undo another device's
+     * reset — so the rejection is kept and treated as real instead: the edit
+     * is replayed after re-resolving against the cloud, and the badge never
+     * claims "Synced" while it is outstanding.
+     */
+    function queueProfileWrite(uid: string, state: TrackerState) {
+      const serializedRoot = serializeRootDocument(state);
       void trackWrite(updateDoc(rootReference(uid), {
         profile: serializedRoot.profile,
         updatedAt: serializedRoot.updatedAt,
-        profileGenerationId: current.generationId,
-      })).catch(() => undefined);
+        profileGenerationId: state.generationId,
+      })).catch(recoverFromWriteRejection);
     }
 
     const unsubscribeMutations = store.subscribeMutations((mutation) => {
@@ -373,12 +533,28 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         const local = localStateRef.current;
         if (!local || !remoteGenerationWins(local, rootDocument, rootFromCache)) return;
 
+        // A live snapshot can carry a generation this device never adopted (a
+        // reset elsewhere). Applying it would erase every local write made
+        // since the split, so park it for the owner instead.
+        if (local.generationId !== cloud.generationId && activeUid) {
+          const work = findUnsyncedLocalWork(local, cloud);
+          if (hasUnsyncedLocalWork(work)) {
+            raiseConflict(activeUid, cloud, describeGenerationConflict(local, cloud, work));
+            return;
+          }
+        }
+
         const hasPendingWrites = pendingWriteCount > 0
           || rootHasPendingWrites
           || habitsHavePendingWrites
           || entriesHavePendingWrites;
         const fromCache = rootFromCache || habitsFromCache || entriesFromCache;
-        const next = local.generationId === cloud.generationId && (hasPendingWrites || fromCache)
+        // Within one generation the merge is always the safe move: entries and
+        // habits are only ever added or updated, never deleted, so the union
+        // can resurrect nothing — while replacing outright would drop any local
+        // write the cloud has not accepted yet (a rejected write, an edit made
+        // before this listener attached).
+        const next = local.generationId === cloud.generationId
           ? mergeSameGeneration(local, cloud)
           : cloud;
         localStateRef.current = next;
@@ -476,12 +652,39 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       ));
     }
 
+    async function publishResolvedState(
+      uid: string,
+      cloud: TrackerState | null,
+      state: TrackerState,
+      writeMode: 'delta' | 'full',
+    ) {
+      const isGenerationWrite = writeMode === 'full';
+      const write = writeMode === 'delta' && cloud
+        ? queueMergeDeltaWrite(uid, cloud, state)
+        : queueFullStateWrite(uid, state);
+      if (isGenerationWrite) pendingGeneration = state.generationId;
+      try {
+        await trackWrite(write);
+        rejectedWrite = false;
+        if (isGenerationWrite) {
+          const acknowledged = { ...state, generationPending: false };
+          localStateRef.current = acknowledged;
+          store.applySyncedState(acknowledged);
+        }
+      } finally {
+        if (isGenerationWrite && pendingGeneration === state.generationId) pendingGeneration = null;
+      }
+    }
+
     async function bootstrap(authUser: User) {
       if (bootstrapInFlight || disposed) return;
       bootstrapInFlight = true;
       const sequence = ++bootstrapSequence;
-      setStatus(navigator.onLine ? 'syncing' : 'offline');
-      setMessage(undefined);
+      if (pendingConflict) showConflict();
+      else {
+        setStatus(navigator.onLine ? 'syncing' : 'offline');
+        setMessage(undefined);
+      }
       try {
         const cloud = await readCloudState(authUser.uid);
         if (disposed || sequence !== bootstrapSequence) return;
@@ -492,30 +695,34 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
           firstUploadGenerationId: makeGenerationId(),
           now,
         });
+
+        // Nothing is applied and nothing is written until the owner answers.
+        if (resolution.mode === 'conflict' && resolution.conflict && cloud) {
+          raiseConflict(authUser.uid, cloud, resolution.conflict);
+          return;
+        }
+
+        pendingConflict = null;
+        setConflict(null);
         localStateRef.current = resolution.state;
         store.applySyncedState(resolution.state);
         activeGeneration = resolution.state.generationId;
+        // This resolution either republishes the changes an earlier write was
+        // rejected for or supersedes them, so nothing is outstanding now. A
+        // failure inside the write below sets the flag again.
+        rejectedWrite = false;
 
         if (resolution.shouldWriteCloud) {
-          const write = resolution.mode === 'merge' && cloud
-            ? queueMergeDeltaWrite(authUser.uid, cloud, resolution.state)
-            : queueFullStateWrite(authUser.uid, resolution.state);
-          const isGenerationWrite = resolution.mode !== 'merge';
-          if (isGenerationWrite) pendingGeneration = resolution.state.generationId;
-          try {
-            await trackWrite(write);
-            if (isGenerationWrite) {
-              const acknowledged = { ...resolution.state, generationPending: false };
-              localStateRef.current = acknowledged;
-              store.applySyncedState(acknowledged);
-            }
-          } finally {
-            if (isGenerationWrite && pendingGeneration === resolution.state.generationId) pendingGeneration = null;
-          }
+          await publishResolvedState(
+            authUser.uid,
+            cloud,
+            resolution.state,
+            resolution.mode === 'merge' ? 'delta' : 'full',
+          );
           if (disposed || sequence !== bootstrapSequence) return;
         }
         startRootListener(authUser.uid);
-        startDataListeners(authUser.uid, serializeRootDocument(resolution.state));
+        startDataListeners(authUser.uid, serializeRootDocument(localStateRef.current ?? resolution.state));
         if (navigator.onLine && pendingWriteCount === 0) markSynced();
         else updateConnectionStatus();
       } catch (error) {
@@ -524,27 +731,65 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         bootstrapInFlight = false;
       }
     }
+
+    /**
+     * Applies the owner's answer to a parked generation conflict. The cloud is
+     * re-read first so the decision lands on the current record, and the local
+     * state used is whatever this device holds now — entries logged while the
+     * conflict was open are included, never stranded.
+     */
+    async function resolveConflictNow(choice: GenerationConflictChoice) {
+      const parked = pendingConflict;
+      const authUser = activeUserRef.current;
+      const local = localStateRef.current;
+      if (!parked || !authUser || !local) return;
+      // Cancels any bootstrap still in flight so it cannot re-park the answer.
+      stopAllListeners();
+      setStatus(navigator.onLine ? 'syncing' : 'offline');
+      setMessage(undefined);
+      try {
+        const cloud = (navigator.onLine ? await readCloudState(parked.uid) : null) ?? parked.cloud;
+        if (disposed) return;
+        const resolution = resolveGenerationConflict(local, cloud, choice, {
+          now: new Date().toISOString(),
+        });
+        pendingConflict = null;
+        setConflict(null);
+        localStateRef.current = resolution.state;
+        store.applySyncedState(resolution.state);
+        activeGeneration = resolution.state.generationId;
+        rejectedWrite = false;
+
+        if (resolution.shouldWriteCloud && resolution.writeMode !== 'none') {
+          await publishResolvedState(parked.uid, cloud, resolution.state, resolution.writeMode);
+        }
+        startRootListener(parked.uid);
+        startDataListeners(parked.uid, serializeRootDocument(localStateRef.current ?? resolution.state));
+        if (navigator.onLine && pendingWriteCount === 0) markSynced();
+        else updateConnectionStatus();
+      } catch (error) {
+        // The conflict stays parked so this device's copy is still protected.
+        if (!pendingConflict) pendingConflict = parked;
+        setConflict(parked.summary);
+        setStatus('action-needed');
+        setMessage(`${friendlySyncError(error)} This device’s copy is untouched — try again.`);
+      }
+    }
+    resolveConflictRef.current = resolveConflictNow;
     bootstrapActiveUserRef.current = () => {
       if (activeUserRef.current) void bootstrap(activeUserRef.current);
     };
 
-    const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
-      if (disposed) return;
-      stopAllListeners();
-      activeUid = null;
-      activeGeneration = null;
-      activeUserRef.current = authUser;
-      setUser(authUser);
-
-      if (!authUser) {
-        setStatus(navigator.onLine ? 'action-needed' : 'offline');
-        setMessage(navigator.onLine ? 'Sign in once on this device to turn on automatic sync.' : 'You are offline. Local tracking is still available.');
-        return;
-      }
-      if (!authUser.emailVerified) {
+    async function startSession(authUser: User) {
+      const eligibility = await describeAccountEligibility(authUser);
+      if (disposed || activeUserRef.current !== authUser) return;
+      if (!eligibility.ok) {
+        activeUid = null;
         setStatus('action-needed');
-        setMessage('Use a verified Google account to sync Daymark.');
-        void firebaseSignOut(firebaseAuth);
+        setMessage(eligibility.message);
+        // Consumed by the signed-out branch below so the reason survives.
+        blockedAccountMessage = eligibility.message;
+        await firebaseSignOut(firebaseAuth).catch(() => undefined);
         return;
       }
 
@@ -553,6 +798,28 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         ? null
         : localStateRef.current?.generationId ?? null;
       void bootstrap(authUser);
+    }
+
+    const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
+      if (disposed) return;
+      stopAllListeners();
+      activeUid = null;
+      activeGeneration = null;
+      activeUserRef.current = authUser;
+      setUser(authUser);
+      pendingConflict = null;
+      setConflict(null);
+      rejectedWrite = false;
+
+      if (!authUser) {
+        const reason = blockedAccountMessage;
+        blockedAccountMessage = null;
+        setStatus(navigator.onLine ? 'action-needed' : 'offline');
+        setMessage(reason ?? (navigator.onLine ? 'Sign in once on this device to turn on automatic sync.' : 'You are offline. Local tracking is still available.'));
+        return;
+      }
+
+      void startSession(authUser);
     });
 
     function handleOffline() {
@@ -581,6 +848,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('online', handleOnline);
       bootstrapActiveUserRef.current = () => undefined;
+      resolveConflictRef.current = async () => undefined;
     };
   }, [store.applySyncedState, store.subscribeMutations]);
 
@@ -598,9 +866,10 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     try {
       await authPersistenceReady;
       const result = await signInWithPopup(firebaseAuth, googleProvider);
-      if (!result.user.emailVerified) {
+      const eligibility = await describeAccountEligibility(result.user);
+      if (!eligibility.ok) {
         await firebaseSignOut(firebaseAuth);
-        throw new Error('Use a verified Google account to sync Daymark.');
+        throw new Error(eligibility.message);
       }
     } catch (error) {
       setStatus('action-needed');
@@ -659,5 +928,9 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     }
   }, [store.applySyncedState, store.clearLocalData]);
 
-  return { status, user, lastSyncedAt, message, signIn, signOut };
+  const resolveConflict = useCallback(async (choice: GenerationConflictChoice) => {
+    await resolveConflictRef.current(choice);
+  }, []);
+
+  return { status, user, lastSyncedAt, message, conflict, resolveConflict, signIn, signOut };
 }

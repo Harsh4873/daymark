@@ -18,7 +18,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { clampToToday } from './dates';
 import { isHabitActiveOn, isHabitHandledOn, isHabitScheduledOn } from './metrics';
-import type { Habit } from './model';
+import type { Habit, ThemePreference } from './model';
 import { useTrackerStore } from './store';
 import { useDaymarkSync, type SyncStatus } from './useDaymarkSync';
 import { HabitDetail } from './views/HabitDetail';
@@ -38,6 +38,9 @@ const NAVIGATION: Array<{ id: ViewId; label: string; shortLabel: string; icon: L
   { id: 'profile', label: 'Profile', shortLabel: 'Profile', icon: UserRound },
 ];
 
+/** Read by the pre-paint resolver in index.html. Daymark-scoped on purpose. */
+const THEME_PREFERENCE_KEY = 'daymark-theme';
+
 const SYNC_PRESENTATION: Record<SyncStatus, { label: string; icon: LucideIcon }> = {
   synced: { label: 'Synced', icon: Cloud },
   syncing: { label: 'Syncing', icon: LoaderCircle },
@@ -48,6 +51,24 @@ const SYNC_PRESENTATION: Record<SyncStatus, { label: string; icon: LucideIcon }>
 function currentView(): ViewId {
   const hash = window.location.hash.replace('#', '') as ViewId;
   return NAVIGATION.some((item) => item.id === hash) ? hash : 'daily';
+}
+
+function readSystemTheme(): 'dark' | 'light' {
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+/**
+ * Mirrors the stored preference for the pre-paint resolver in index.html, which
+ * runs before the tracker state is read out of IndexedDB. `system` is written
+ * as "no explicit choice" so the first paint follows the device too.
+ */
+function rememberThemePreference(preference: ThemePreference | undefined) {
+  try {
+    if (preference === 'light' || preference === 'dark') localStorage.setItem(THEME_PREFERENCE_KEY, preference);
+    else if (preference) localStorage.removeItem(THEME_PREFERENCE_KEY);
+  } catch {
+    // A blocked localStorage only costs the pre-paint hint.
+  }
 }
 
 function DaymarkLogo() {
@@ -71,10 +92,14 @@ export default function App() {
   const [yearDate, setYearDate] = useState(new Date());
   const [detailHabitId, setDetailHabitId] = useState<string | null>(null);
   const [editorState, setEditorState] = useState<{ habit: Habit; locked: boolean } | null>(null);
-  const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  const [systemTheme, setSystemTheme] = useState<'dark' | 'light'>(() => readSystemTheme());
   const firstViewRender = useRef(true);
   const themePreference = store.state?.profile.theme;
-  const resolvedTheme = themePreference === 'system' ? systemTheme : themePreference ?? 'dark';
+  // Same rule as the harsh.bet landing page: an explicit Dark/Light choice
+  // wins, anything else (including no choice yet) follows the device.
+  const resolvedTheme = themePreference === 'light' || themePreference === 'dark'
+    ? themePreference
+    : systemTheme;
   const ready = Boolean(store.state);
 
   useEffect(() => {
@@ -94,6 +119,10 @@ export default function App() {
     document.documentElement.dataset.theme = resolvedTheme;
     document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute('content', resolvedTheme === 'light' ? '#f2f3ed' : '#101311');
   }, [resolvedTheme]);
+
+  useEffect(() => {
+    rememberThemePreference(themePreference);
+  }, [themePreference]);
 
   useEffect(() => {
     if (!ready) return;
@@ -198,6 +227,14 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {sync.conflict && (
+        <div className="storage-warning" role="alert">
+          <CircleAlert aria-hidden="true" />
+          <span>{sync.message ?? 'This device holds entries the synced record does not have. Nothing was deleted — choose what to keep.'}</span>
+          <button type="button" onClick={() => navigate('profile')}>Choose what to keep</button>
+        </div>
+      )}
 
       {store.storageWarning && (
         <div className="storage-warning" role="alert">
