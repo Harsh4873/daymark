@@ -141,92 +141,15 @@ interface InitialStateOptions {
   startDate?: string;
 }
 
+/** A new tracker has no name attached to it until its owner types one. */
+export const DEFAULT_DISPLAY_NAME = '';
+
 export function createInitialState(options: InitialStateOptions = {}): TrackerState {
   const now = options.now ?? new Date().toISOString();
-  const today = options.startDate ?? localDateKey(new Date(now));
   const generationId = options.generationId ?? 'local-v1';
   const generationUpdatedAt = options.generationUpdatedAt
     ?? (generationId === 'local-v1' ? '1970-01-01T00:00:00.000Z' : now);
   const entityUpdatedAt = generationId === 'local-v1' ? generationUpdatedAt : now;
-
-  const habits: Habit[] = [
-    {
-      id: 'starter-steps',
-      name: '10K steps',
-      category: 'Movement',
-      icon: 'footprints',
-      color: '#b8f35b',
-      metric: 'quantity',
-      target: 10000,
-      unit: 'steps',
-      period: 'day',
-      direction: 'atLeast',
-      schedule: { type: 'everyday' },
-      timeSlot: 'anytime',
-      increment: 1000,
-      startDate: today,
-      createdAt: now,
-      updatedAt: entityUpdatedAt,
-      order: 0,
-    },
-    {
-      id: 'starter-read',
-      name: 'Read',
-      category: 'Mind',
-      icon: 'book',
-      color: '#8d7cff',
-      metric: 'duration',
-      target: 20,
-      unit: 'min',
-      period: 'day',
-      direction: 'atLeast',
-      schedule: { type: 'everyday' },
-      timeSlot: 'evening',
-      increment: 5,
-      startDate: today,
-      createdAt: now,
-      updatedAt: entityUpdatedAt,
-      order: 1,
-    },
-    {
-      id: 'starter-train',
-      name: 'Train',
-      category: 'Movement',
-      icon: 'dumbbell',
-      color: '#ff8e64',
-      metric: 'check',
-      target: 4,
-      unit: 'sessions',
-      period: 'week',
-      direction: 'atLeast',
-      schedule: { type: 'everyday' },
-      timeSlot: 'anytime',
-      increment: 1,
-      startDate: today,
-      createdAt: now,
-      updatedAt: entityUpdatedAt,
-      order: 2,
-    },
-    {
-      id: 'starter-focus',
-      name: 'Deep work',
-      category: 'Craft',
-      icon: 'brain',
-      color: '#58c9d6',
-      metric: 'duration',
-      target: 90,
-      unit: 'min',
-      period: 'day',
-      direction: 'atLeast',
-      schedule: { type: 'selectedDays', days: [1, 2, 3, 4, 5] },
-      timeSlot: 'morning',
-      increment: 15,
-      startDate: today,
-      createdAt: now,
-      updatedAt: entityUpdatedAt,
-      order: 3,
-    },
-  ];
 
   return {
     version: 2,
@@ -234,12 +157,12 @@ export function createInitialState(options: InitialStateOptions = {}): TrackerSt
     generationUpdatedAt,
     generationPending: options.generationPending ?? false,
     profile: {
-      displayName: 'Harsh',
+      displayName: DEFAULT_DISPLAY_NAME,
       weekStartsOn: 1,
       theme: 'dark',
       updatedAt: entityUpdatedAt,
     },
-    habits,
+    habits: [],
     entries: {},
   };
 }

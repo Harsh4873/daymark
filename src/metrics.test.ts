@@ -51,7 +51,7 @@ function tracker(testHabit: Habit, entries: TrackerState['entries'] = {}): Track
     generationId: 'test-generation',
     generationUpdatedAt: timestamp,
     generationPending: false,
-    profile: { displayName: 'Harsh', weekStartsOn: 1, theme: 'dark', updatedAt: timestamp },
+    profile: { displayName: 'Test User', weekStartsOn: 1, theme: 'dark', updatedAt: timestamp },
     habits: [testHabit],
     entries,
   };

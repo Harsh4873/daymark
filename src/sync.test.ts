@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type HabitEntry, type TrackerState } from './model';
+import { createPopulatedState } from './exampleTracker';
 import { parseTrackerState } from './store';
 import {
   LEGACY_GENERATION_UPDATED_AT,
@@ -25,7 +26,7 @@ const later = '2026-07-01T09:00:00.000Z';
 const latest = '2026-07-01T10:00:00.000Z';
 
 function state(generationId = 'generation-a'): TrackerState {
-  return createInitialState({
+  return createPopulatedState({
     generationId,
     generationUpdatedAt: earlier,
     now: earlier,
@@ -128,7 +129,7 @@ describe('first sync resolution', () => {
   });
 
   it('treats a start-date-only habit edit as meaningful', () => {
-    const local = createInitialState({ now: later, startDate: '2026-07-01' });
+    const local = createPopulatedState({ now: later, startDate: '2026-07-01' });
     local.habits[0] = { ...local.habits[0], startDate: '2026-06-01', updatedAt: later };
 
     expect(isMeaningfulLocalState(local)).toBe(true);

@@ -1,3 +1,4 @@
+import { DEFAULT_DISPLAY_NAME } from './model';
 import type { Habit, HabitEntry, TrackerProfile, TrackerState } from './model';
 
 export const LEGACY_LOCAL_GENERATION_ID = 'local-v1';
@@ -338,7 +339,7 @@ export function isUntouchedStarterHabit(habit: Habit) {
 }
 
 export function isDefaultTrackerProfile(profile: TrackerProfile) {
-  return profile.displayName === 'Harsh'
+  return profile.displayName === DEFAULT_DISPLAY_NAME
     && profile.weekStartsOn === 1
     && profile.theme === 'dark'
     && profile.lastBackupAt === undefined;
@@ -349,13 +350,19 @@ export function isMeaningfulLocalState(state: TrackerState) {
   if (hasEntries) return true;
 
   if (
-    state.profile.displayName !== 'Harsh'
+    state.profile.displayName !== DEFAULT_DISPLAY_NAME
     || state.profile.weekStartsOn !== 1
     || state.profile.theme !== 'dark'
   ) {
     return true;
   }
 
+  // A fresh install now starts with no habits at all. Reporting that as
+  // meaningful would let an empty device overwrite a real account on sign-in.
+  if (state.habits.length === 0) return false;
+
+  // STARTER_HABITS is a legacy signature table: devices set up before the
+  // tracker started empty still carry these four, untouched.
   if (state.habits.length !== STARTER_HABITS.length) return true;
 
   const actualById = new Map(state.habits.map((habit) => [habit.id, habit]));

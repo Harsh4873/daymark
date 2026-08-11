@@ -434,7 +434,7 @@ export function ProfileView({
   const entryCount = Object.values(state.entries).reduce((sum, day) => sum + Object.keys(day).length, 0);
   const syncPresentation = SYNC_PRESENTATION[sync.status];
   const SyncIcon = syncPresentation.icon;
-  const signedInName = sync.user?.displayName?.trim() || 'Harsh';
+  const signedInName = sync.user?.displayName?.trim() || sync.user?.email?.split('@')[0] || 'Your account';
 
   async function startSignIn() {
     if (authAction) return;
