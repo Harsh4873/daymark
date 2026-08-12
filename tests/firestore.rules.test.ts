@@ -7,7 +7,7 @@ import {
 } from '@firebase/rules-unit-testing';
 import { readFile } from 'node:fs/promises';
 import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { afterAll, afterEach, beforeAll, describe, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it } from 'vitest';
 
 const PROJECT_ID = 'demo-daymark';
 const TEST_EMAIL = 'user.one@example.com';
@@ -41,6 +41,14 @@ describe.skipIf(!EMULATOR_ADDRESS)('Daymark Firestore security rules', () => {
         port: Number(rawPort),
         rules,
       },
+    });
+  });
+
+  beforeEach(async () => {
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'owner_vault_members', OWNER_UID), {
+        vaultId: OWNER_UID, schemaVersion: 1, status: 'active', legacyWritesEnabled: false,
+      });
     });
   });
 
@@ -125,18 +133,18 @@ describe.skipIf(!EMULATOR_ADDRESS)('Daymark Firestore security rules', () => {
     );
   });
 
-  it('allows another verified Google account to use its own UID-scoped workspace', async () => {
+  it('denies an unapproved verified Google account a Firebase workspace', async () => {
     const secondUid = 'second-daymark-user';
     const firestore = authorizedContext(testEnvironment, secondUid, {
       email: 'someone-else@example.com',
     }).firestore();
 
     const root = doc(firestore, 'daymark_users', secondUid);
-    await assertSucceeds(setDoc(root, {
+    await assertFails(setDoc(root, {
       generationId: 'generation-2',
       profileGenerationId: 'generation-2',
     }));
-    await assertSucceeds(getDoc(root));
+    await assertFails(getDoc(root));
   });
 
   it('denies an unverified email', async () => {

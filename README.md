@@ -20,9 +20,9 @@ Daymark is the private, local-first habit app published at `harsh.bet/daymark/`.
 
 ## Sync and privacy
 
-Any verified Google account can sign in. Firestore isolates each account under its Authentication UID, so users cannot read or write one another's data. Authentication persists on each device until explicit sign-out, so the normal experience remains automatic after signing in once.
+Only a provisioned verified Google session can sync. Both approved identities resolve through `owner_vault_members/{uid}` to the same private vault; any other identity fails closed. Authentication persists on each device until explicit sign-out, so the normal experience remains automatic after signing in once.
 
-Firestore data is isolated under `daymark_users/{uid}` with separate habit and entry documents. This keeps unrelated check-ins from overwriting one another, while a generation ID makes reset and JSON-import replacements propagate cleanly. The combined Firestore rules preserve every Gym, Daymark, Slate, Fare, Notes, Sift, and Recall namespace while denying signed-out users, mismatched UIDs, and every unrelated collection. The rules file must stay byte-identical across all six app repositories. Firebase Analytics is not enabled.
+Firestore data is isolated under `daymark_users/{vaultId}` with separate habit and entry documents. This keeps unrelated check-ins from overwriting one another, while a generation ID makes reset and JSON-import replacements propagate cleanly. The combined Firestore rules preserve every private-app namespace while denying signed-out users, mismatched vaults, unprovisioned accounts, and unrelated collections. The rules file must stay byte-identical across all private-app repositories. Firebase Analytics is not enabled.
 
 The browser mirror remains the first read and write path for instant startup and offline use. Cloud sync aligns devices; JSON export remains the portable backup the user controls. Signing out waits for pending writes, then removes Daymark's local copy from that device.
 

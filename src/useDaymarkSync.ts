@@ -57,6 +57,7 @@ import {
   type GenerationConflictChoice,
 } from './sync-core';
 import { parseTrackerState, type TrackerMutation, type TrackerStore } from './store';
+import { resolveOwnerVault } from './owner-vault';
 
 const WRITE_BATCH_SIZE = 450;
 
@@ -357,7 +358,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       if (!authUser || now - lastRecoveryAt < 30_000) return;
       lastRecoveryAt = now;
       setMessage('The synced record changed on another device. Daymark is re-checking this device’s copy…');
-      void bootstrap(authUser);
+      void bootstrap();
     }
 
     async function queueFullStateWrite(uid: string, state: TrackerState) {
@@ -709,8 +710,10 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       }
     }
 
-    async function bootstrap(authUser: User) {
+    async function bootstrap() {
       if (bootstrapInFlight || disposed) return;
+      const vaultId = activeUid;
+      if (!vaultId) return;
       bootstrapInFlight = true;
       const sequence = ++bootstrapSequence;
       if (pendingConflict) showConflict();
@@ -719,7 +722,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         setMessage(undefined);
       }
       try {
-        const cloud = await readCloudState(authUser.uid);
+        const cloud = await readCloudState(vaultId);
         if (disposed || sequence !== bootstrapSequence) return;
         const local = localStateRef.current;
         if (!local) return;
@@ -731,7 +734,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
 
         // Nothing is applied and nothing is written until the owner answers.
         if (resolution.mode === 'conflict' && resolution.conflict && cloud) {
-          raiseConflict(authUser.uid, cloud, resolution.conflict);
+          raiseConflict(vaultId, cloud, resolution.conflict);
           return;
         }
 
@@ -747,15 +750,15 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
 
         if (resolution.shouldWriteCloud) {
           await publishResolvedState(
-            authUser.uid,
+            vaultId,
             cloud,
             resolution.state,
             resolution.mode === 'merge' ? 'delta' : 'full',
           );
           if (disposed || sequence !== bootstrapSequence) return;
         }
-        startRootListener(authUser.uid);
-        startDataListeners(authUser.uid, serializeRootDocument(localStateRef.current ?? resolution.state));
+        startRootListener(vaultId);
+        startDataListeners(vaultId, serializeRootDocument(localStateRef.current ?? resolution.state));
         if (navigator.onLine && pendingWriteCount === 0) markSynced();
         else updateConnectionStatus();
       } catch (error) {
@@ -810,7 +813,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     }
     resolveConflictRef.current = resolveConflictNow;
     bootstrapActiveUserRef.current = () => {
-      if (activeUserRef.current) void bootstrap(activeUserRef.current);
+      if (activeUserRef.current) void bootstrap();
     };
 
     async function startSession(authUser: User, sequence: number) {
@@ -826,13 +829,27 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         return;
       }
 
+      let membership;
+      try {
+        membership = await resolveOwnerVault(daymarkFirestore, authUser);
+      } catch (error) {
+        if (disposed || sequence !== authSequence) return;
+        const reason = error instanceof Error ? error.message : 'This account cannot access the shared owner vault.';
+        activeUid = null;
+        setStatus('action-needed');
+        setMessage(reason);
+        blockedAccountMessage = reason;
+        return;
+      }
+      if (disposed || sequence !== authSequence) return;
+
       activeUserRef.current = authUser;
       setUser(authUser);
-      activeUid = authUser.uid;
+      activeUid = membership.vaultId;
       activeGeneration = localStateRef.current?.generationId === LEGACY_LOCAL_GENERATION_ID
         ? null
         : localStateRef.current?.generationId ?? null;
-      void bootstrap(authUser);
+      void bootstrap();
     }
 
     const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
@@ -866,7 +883,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       if (activeUserRef.current && rootUnsubscribe) {
         setStatus('syncing');
         setMessage(undefined);
-      } else if (activeUserRef.current) void bootstrap(activeUserRef.current);
+      } else if (activeUserRef.current) void bootstrap();
       else {
         setStatus('action-needed');
         setMessage('Sign in once on this device to turn on automatic sync.');
