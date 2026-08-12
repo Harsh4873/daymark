@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithPopup,
   signOut as firebaseSignOut,
@@ -30,8 +29,13 @@ import {
   firebaseAuth,
   googleProvider,
 } from './firebase';
+import {
+  acknowledgePublishedGeneration,
+  GenerationWriteCoordinator,
+} from './generation-write-coordinator';
 import { createInitialState, makeGenerationId, type TrackerState } from './model';
 import { finishSafeSignOut } from './signout';
+import { syncAccountProblem } from './sync-account';
 import {
   LEGACY_LOCAL_GENERATION_ID,
   describeGenerationConflict,
@@ -74,35 +78,34 @@ export interface DaymarkSync {
 
 const UNVERIFIED_ACCOUNT_MESSAGE = 'Use a verified Google account to sync Daymark.';
 const NON_GOOGLE_ACCOUNT_MESSAGE = 'Daymark only syncs accounts signed in with Google. Sign in again with the Google button.';
+const TOKEN_CHECK_ACCOUNT_MESSAGE = 'Daymark could not verify this Google session. Reconnect, then sign in again with the Google button.';
 
 /**
  * Mirrors the shared Firestore rules, which require a verified email *and*
  * `sign_in_provider == 'google.com'`. Checking only `emailVerified` let a
  * non-Google session through and turned every read into a raw permission
- * error. The provider claim needs a token, so a session that cannot be
- * refreshed (offline) falls back to the linked providers rather than throwing
- * the owner out.
+ * error. The provider claim needs a token, and a session whose token cannot be
+ * inspected must stay out of Firestore because linked providers cannot prove
+ * which provider issued the current session.
  */
 async function describeAccountEligibility(authUser: User): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (!authUser.email || !authUser.emailVerified) {
-    return { ok: false, message: UNVERIFIED_ACCOUNT_MESSAGE };
-  }
-
-  let signInProvider: string | null = null;
+  let signInProvider: string | null | undefined;
   try {
     signInProvider = (await authUser.getIdTokenResult()).signInProvider ?? null;
   } catch {
-    signInProvider = null;
+    return { ok: false, message: TOKEN_CHECK_ACCOUNT_MESSAGE };
   }
 
-  const linkedToGoogle = authUser.providerData.some(
-    (provider) => provider.providerId === GoogleAuthProvider.PROVIDER_ID,
-  );
-  const isGoogleSession = signInProvider
-    ? signInProvider === GoogleAuthProvider.PROVIDER_ID
-    : linkedToGoogle;
-
-  return isGoogleSession ? { ok: true } : { ok: false, message: NON_GOOGLE_ACCOUNT_MESSAGE };
+  const problem = syncAccountProblem({
+    email: authUser.email,
+    emailVerified: authUser.emailVerified,
+    signInProvider,
+  });
+  if (!problem) return { ok: true };
+  return {
+    ok: false,
+    message: problem === 'unverified-provider' ? NON_GOOGLE_ACCOUNT_MESSAGE : UNVERIFIED_ACCOUNT_MESSAGE,
+  };
 }
 
 function countLabel(count: number, singular: string, plural: string) {
@@ -225,10 +228,12 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     let pendingGeneration: string | null = null;
     let bootstrapInFlight = false;
     let bootstrapSequence = 0;
+    let authSequence = 0;
     let pendingConflict: { uid: string; cloud: TrackerState; summary: GenerationConflict } | null = null;
     let blockedAccountMessage: string | null = null;
     let rejectedWrite = false;
     let lastRecoveryAt = 0;
+    const writeCoordinator = new GenerationWriteCoordinator();
 
     function showError(error: unknown) {
       if (disposed) return;
@@ -438,18 +443,29 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       if (mutation.type === 'replace') {
         activeGeneration = mutation.state.generationId;
         pendingGeneration = mutation.state.generationId;
-        stopDataListeners();
-        void trackWrite(queueFullStateWrite(uid, mutation.state))
+        // Invalidate a bootstrap that may already be publishing an older
+        // generation. Its write can finish, but it cannot resume listeners or
+        // apply an acknowledgement over this replacement.
+        stopAllListeners();
+        if (navigator.onLine) setStatus('syncing');
+        const publication = trackWrite(writeCoordinator.enqueuePublication(
+          mutation.state.generationId,
+          () => queueFullStateWrite(uid, mutation.state),
+        ));
+        void publication
           .then(() => {
             const latest = localStateRef.current;
+            const acknowledged = acknowledgePublishedGeneration(
+              latest,
+              mutation.state.generationId,
+            );
+            if (!acknowledged) return;
             // Listeners are stopped while a conflict is parked; the replacement
             // answered it, so bring them back on the published generation.
             if (!rootUnsubscribe) {
               startRootListener(uid);
-              startDataListeners(uid, serializeRootDocument(mutation.state));
+              startDataListeners(uid, serializeRootDocument(acknowledged));
             }
-            if (latest?.generationId !== mutation.state.generationId) return;
-            const acknowledged = { ...latest, generationPending: false };
             localStateRef.current = acknowledged;
             store.applySyncedState(acknowledged);
           })
@@ -504,12 +520,20 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
      * claims "Synced" while it is outstanding.
      */
     function queueProfileWrite(uid: string, state: TrackerState) {
-      const serializedRoot = serializeRootDocument(state);
-      void trackWrite(updateDoc(rootReference(uid), {
-        profile: serializedRoot.profile,
-        updatedAt: serializedRoot.updatedAt,
-        profileGenerationId: state.generationId,
-      })).catch(recoverFromWriteRejection);
+      if (navigator.onLine) setStatus('syncing');
+      setMessage(undefined);
+      void writeCoordinator.enqueueProfileWrite(state.generationId, async () => {
+        // Use the newest profile after the barrier, and never let an old queued
+        // edit follow the device onto a different generation.
+        const latest = localStateRef.current;
+        if (!latest || latest.generationId !== state.generationId || pendingConflict) return;
+        const serializedRoot = serializeRootDocument(latest);
+        await trackWrite(updateDoc(rootReference(uid), {
+          profile: serializedRoot.profile,
+          updatedAt: serializedRoot.updatedAt,
+          profileGenerationId: latest.generationId,
+        }));
+      }).catch(recoverFromWriteRejection);
     }
 
     const unsubscribeMutations = store.subscribeMutations((mutation) => {
@@ -658,18 +682,27 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       state: TrackerState,
       writeMode: 'delta' | 'full',
     ) {
-      const isGenerationWrite = writeMode === 'full';
-      const write = writeMode === 'delta' && cloud
-        ? queueMergeDeltaWrite(uid, cloud, state)
-        : queueFullStateWrite(uid, state);
+      const isGenerationWrite = writeMode === 'full' || !cloud;
       if (isGenerationWrite) pendingGeneration = state.generationId;
       try {
-        await trackWrite(write);
+        const trackedWrite = isGenerationWrite
+          ? trackWrite(writeCoordinator.enqueuePublication(
+            state.generationId,
+            () => queueFullStateWrite(uid, state),
+          ))
+          : trackWrite(queueMergeDeltaWrite(uid, cloud!, state));
+        await trackedWrite;
         rejectedWrite = false;
         if (isGenerationWrite) {
-          const acknowledged = { ...state, generationPending: false };
-          localStateRef.current = acknowledged;
-          store.applySyncedState(acknowledged);
+          // The owner can keep editing while a large generation upload is in
+          // flight. Acknowledge the newest in-memory copy, not the pre-upload
+          // snapshot, or this completion handler would roll those edits back.
+          const latest = localStateRef.current;
+          const acknowledged = acknowledgePublishedGeneration(latest, state.generationId);
+          if (acknowledged) {
+            localStateRef.current = acknowledged;
+            store.applySyncedState(acknowledged);
+          }
         }
       } finally {
         if (isGenerationWrite && pendingGeneration === state.generationId) pendingGeneration = null;
@@ -780,9 +813,9 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       if (activeUserRef.current) void bootstrap(activeUserRef.current);
     };
 
-    async function startSession(authUser: User) {
+    async function startSession(authUser: User, sequence: number) {
       const eligibility = await describeAccountEligibility(authUser);
-      if (disposed || activeUserRef.current !== authUser) return;
+      if (disposed || sequence !== authSequence) return;
       if (!eligibility.ok) {
         activeUid = null;
         setStatus('action-needed');
@@ -793,6 +826,8 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         return;
       }
 
+      activeUserRef.current = authUser;
+      setUser(authUser);
       activeUid = authUser.uid;
       activeGeneration = localStateRef.current?.generationId === LEGACY_LOCAL_GENERATION_ID
         ? null
@@ -802,11 +837,12 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
 
     const unsubscribeAuth = onAuthStateChanged(firebaseAuth, (authUser) => {
       if (disposed) return;
+      const sequence = ++authSequence;
       stopAllListeners();
       activeUid = null;
       activeGeneration = null;
-      activeUserRef.current = authUser;
-      setUser(authUser);
+      activeUserRef.current = null;
+      setUser(null);
       pendingConflict = null;
       setConflict(null);
       rejectedWrite = false;
@@ -819,7 +855,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         return;
       }
 
-      void startSession(authUser);
+      void startSession(authUser, sequence);
     });
 
     function handleOffline() {
@@ -842,6 +878,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
 
     return () => {
       disposed = true;
+      authSequence += 1;
       unsubscribeAuth();
       unsubscribeMutations();
       stopAllListeners();
