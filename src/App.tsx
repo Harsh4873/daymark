@@ -20,6 +20,7 @@ import { clampToToday } from './dates';
 import { isHabitActiveOn, isHabitHandledOn, isHabitScheduledOn } from './metrics';
 import type { Habit, ThemePreference } from './model';
 import { useTrackerStore } from './store';
+import { useDailyDate } from './useDailyDate';
 import { useDaymarkSync, type SyncStatus } from './useDaymarkSync';
 import { HabitDetail } from './views/HabitDetail';
 import { MonthView } from './views/MonthView';
@@ -86,7 +87,7 @@ export default function App() {
   const store = useTrackerStore();
   const sync = useDaymarkSync(store);
   const [view, setView] = useState<ViewId>(currentView);
-  const [dailyDate, setDailyDate] = useState(new Date());
+  const { dailyDate, setDailyDate, todayKey } = useDailyDate();
   const [weekDate, setWeekDate] = useState(new Date());
   const [monthDate, setMonthDate] = useState(new Date());
   const [yearDate, setYearDate] = useState(new Date());
@@ -148,7 +149,7 @@ export default function App() {
       (habit) => isHabitScheduledOn(habit, today) && !isHabitHandledOn(habit, today, current),
     ).length;
     void (remaining > 0 ? nav.setAppBadge(remaining) : nav.clearAppBadge?.())?.catch(() => {});
-  }, [store.state]);
+  }, [store.state, todayKey]);
 
   function navigate(nextView: ViewId) {
     if (window.location.hash === `#${nextView}`) setView(nextView);
