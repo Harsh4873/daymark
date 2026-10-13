@@ -6,7 +6,6 @@
   "start_url": "/daymark/#daily",
   "scope": "/daymark/",
   "display": "standalone",
-  "orientation": "portrait-primary",
   "background_color": "#101311",
   "theme_color": "#101311",
   "icons": [

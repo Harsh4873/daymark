@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  getRedirectResult,
   onAuthStateChanged,
   signInWithPopup,
+  signInWithRedirect,
   signOut as firebaseSignOut,
   type User,
 } from 'firebase/auth';
@@ -61,7 +63,7 @@ import { resolveOwnerVault } from './owner-vault';
 
 const WRITE_BATCH_SIZE = 450;
 
-export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'action-needed';
+export type SyncStatus = 'synced' | 'syncing' | 'offline' | 'local' | 'action-needed';
 
 export type { GenerationConflict, GenerationConflictChoice } from './sync-core';
 
@@ -138,9 +140,19 @@ function timestampOrder(left: string, right: string) {
   return left.localeCompare(right);
 }
 
+/** Installed apps and phone browsers cannot rely on a popup window. */
+function prefersRedirectSignIn() {
+  const nav = navigator as Navigator & { standalone?: boolean };
+  if (nav.standalone) return true;
+  if (window.matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) return true;
+  return window.matchMedia('(pointer: coarse)').matches;
+}
+
 function friendlySyncError(error: unknown) {
   const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : '';
-  if (code.includes('popup-closed-by-user')) return 'Sign-in was cancelled. Your local Daymark data is unchanged.';
+  if (code.includes('popup-closed-by-user') || code.includes('cancelled-popup-request') || code.includes('redirect-cancelled-by-user')) {
+    return 'Sign-in was cancelled. Your local Daymark data is unchanged.';
+  }
   if (code.includes('popup-blocked')) return 'Allow the Google sign-in window, then try again.';
   if (code.includes('permission-denied')) return 'This Google account is not allowed to access Daymark.';
   if (code.includes('unavailable') || !navigator.onLine) return 'You are offline. Changes stay on this device and will sync after reconnection.';
@@ -159,7 +171,7 @@ function isCloudRoot(value: unknown): value is CloudUserDocument {
 }
 
 export function useDaymarkSync(store: TrackerStore): DaymarkSync {
-  const [status, setStatus] = useState<SyncStatus>(() => navigator.onLine ? 'action-needed' : 'offline');
+  const [status, setStatus] = useState<SyncStatus>(() => navigator.onLine ? 'local' : 'offline');
   const [user, setUser] = useState<User | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>();
   const [message, setMessage] = useState<string>();
@@ -232,6 +244,29 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     let authSequence = 0;
     let pendingConflict: { uid: string; cloud: TrackerState; summary: GenerationConflict } | null = null;
     let blockedAccountMessage: string | null = null;
+    let redirectError: string | null = null;
+
+    function showSignedOut(reason: string | null) {
+      if (reason) {
+        setStatus('action-needed');
+        setMessage(reason);
+        return;
+      }
+      setStatus(navigator.onLine ? 'local' : 'offline');
+      setMessage(navigator.onLine
+        ? 'Sign in once on this device to turn on automatic sync.'
+        : 'You are offline. Local tracking is still available.');
+    }
+
+    void authPersistenceReady.then(() => {
+      if (disposed) return;
+      return getRedirectResult(firebaseAuth).catch((error) => {
+        if (disposed) return;
+        redirectError = friendlySyncError(error);
+        setStatus('action-needed');
+        setMessage(redirectError);
+      });
+    }).catch(() => undefined);
     let rejectedWrite = false;
     let lastRecoveryAt = 0;
     const writeCoordinator = new GenerationWriteCoordinator();
@@ -865,10 +900,10 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
       rejectedWrite = false;
 
       if (!authUser) {
-        const reason = blockedAccountMessage;
+        const reason = blockedAccountMessage ?? redirectError;
         blockedAccountMessage = null;
-        setStatus(navigator.onLine ? 'action-needed' : 'offline');
-        setMessage(reason ?? (navigator.onLine ? 'Sign in once on this device to turn on automatic sync.' : 'You are offline. Local tracking is still available.'));
+        redirectError = null;
+        showSignedOut(reason);
         return;
       }
 
@@ -884,10 +919,7 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
         setStatus('syncing');
         setMessage(undefined);
       } else if (activeUserRef.current) void bootstrap();
-      else {
-        setStatus('action-needed');
-        setMessage('Sign in once on this device to turn on automatic sync.');
-      }
+      else showSignedOut(null);
     }
 
     window.addEventListener('offline', handleOffline);
@@ -919,6 +951,10 @@ export function useDaymarkSync(store: TrackerStore): DaymarkSync {
     }
     try {
       await authPersistenceReady;
+      if (prefersRedirectSignIn()) {
+        await signInWithRedirect(firebaseAuth, googleProvider);
+        return;
+      }
       const result = await signInWithPopup(firebaseAuth, googleProvider);
       const eligibility = await describeAccountEligibility(result.user);
       if (!eligibility.ok) {

@@ -112,22 +112,29 @@ export function getHabitPeriodProgress(
   // A per-day skip exempts a daily goal. It cannot silently waive an entire
   // flexible week or month; those periods need an explicit period-level mode.
   const skipped = habit.period === 'day' && entries.some((entry) => entry.skipped) && usable.length === 0;
+  // A check can be logged once per active day. Cap the period target at the
+  // days this habit can actually occur, so "31" still finishes in a short
+  // month or a period that starts halfway through.
+  const reachableDays = periodDays.filter((date) => isHabitScheduledOn(habit, date)).length;
+  const target = habit.metric === 'check' && habit.period !== 'day'
+    ? Math.min(habit.target, Math.max(1, reachableDays))
+    : habit.target;
   const ratio = habit.direction === 'atMost'
     ? hasEntry
-      ? value <= habit.target
+      ? value <= target
         ? 1
-        : clamp(habit.target / Math.max(value, 1))
+        : clamp(target / Math.max(value, 1))
       : 0
-    : clamp(value / Math.max(habit.target, 0.0001));
+    : clamp(value / Math.max(target, 0.0001));
   const complete = habit.direction === 'atMost'
     ? hasEntry
-      && value <= habit.target
+      && value <= target
       && (habit.period === 'day' || toDateKey(end) < toDateKey(new Date()))
-    : value >= habit.target;
+    : value >= target;
 
   return {
     value,
-    target: habit.target,
+    target,
     ratio,
     complete,
     hasEntry,
@@ -138,12 +145,56 @@ export function getHabitPeriodProgress(
   };
 }
 
-/** True when nothing more is asked of this habit on this day: skipped, checked, or period goal met. */
-export function isHabitHandledOn(habit: Habit, date: Date, state: TrackerState) {
+/**
+ * What today asks of a habit. Streak completion stays on `getHabitPeriodProgress`:
+ * an open stay-under week is not a finished streak, but it is also not "still due"
+ * once the running total is already within the cap. Unlogged flexible goals stay
+ * off today's remainder. Logging today's check, or a full quick-add, settles
+ * the day even when the week or month is still short.
+ */
+export type HabitDayAttention = 'unscheduled' | 'open' | 'satisfied' | 'optional';
+
+export function getHabitDayAttention(habit: Habit, date: Date, state: TrackerState): HabitDayAttention {
+  if (!isHabitScheduledOn(habit, date)) return 'unscheduled';
   const entry = getEntry(state, habit.id, date);
-  if (entry?.skipped) return true;
-  if (habit.metric === 'check' && habit.period === 'day') return Boolean(entry && entry.value > 0);
-  return getHabitPeriodProgress(habit, date, state).complete;
+  if (entry?.skipped) return 'satisfied';
+  if (habit.metric === 'check' && habit.period === 'day') {
+    return entry && entry.value > 0 ? 'satisfied' : 'open';
+  }
+
+  const progress = getHabitPeriodProgress(habit, date, state);
+  if (progress.complete || progress.skipped) return 'satisfied';
+  if (habit.direction === 'atMost' && progress.hasEntry && progress.value <= progress.target) return 'satisfied';
+  if (habit.direction === 'atMost' && progress.hasEntry && progress.value > progress.target) return 'open';
+  if (habit.period !== 'day' && !hasLoggedValue(entry)) return 'optional';
+  if (habit.period !== 'day' && habit.metric === 'check' && (entry?.value ?? 0) > 0) return 'satisfied';
+  // One full quick-add settles today. The period can still be short; the row
+  // stays available, but it must not read as both 100% and "left".
+  if (habit.period !== 'day' && (getDayContributionRatio(habit, date, state) ?? 0) >= 1) return 'satisfied';
+  return 'open';
+}
+
+/** True when nothing more is asked of this habit today: done, skipped, within a stay-under cap, or not a daily obligation. */
+export function isHabitHandledOn(habit: Habit, date: Date, state: TrackerState) {
+  return getHabitDayAttention(habit, date, state) !== 'open';
+}
+
+export interface HabitHeatMark {
+  ratio: number | null;
+  off: boolean;
+  skipped: boolean;
+}
+
+/** Off-schedule days and skips are not misses. `ratio` is null for both so a heatmap can paint them apart from a zero. */
+export function describeHabitHeatCell(habit: Habit, date: Date, state: TrackerState): HabitHeatMark {
+  if (!isHabitScheduledOn(habit, date)) return { ratio: null, off: true, skipped: false };
+  const entry = getEntry(state, habit.id, date);
+  if (entry?.skipped) return { ratio: null, off: false, skipped: true };
+  return {
+    ratio: getDayContributionRatio(habit, date, state) ?? 0,
+    off: false,
+    skipped: false,
+  };
 }
 
 export function getDayContributionRatio(habit: Habit, date: Date, state: TrackerState) {
@@ -169,9 +220,13 @@ export function getDaySnapshot(state: TrackerState, date: Date, habits = state.h
   const eligible = habits.filter((habit) => {
     if (!isHabitScheduledOn(habit, date)) return false;
     // Flexible weekly/monthly goals are opportunities, not seven daily obligations.
-    // They enter a day's score only when the user records activity on that day.
+    // They enter a day's score only when the user records activity on that day,
+    // or when a stay-under period is already over its cap.
     const entry = getEntry(state, habit.id, date);
-    return habit.period === 'day' || Boolean(entry?.skipped) || hasLoggedValue(entry);
+    if (habit.period === 'day' || entry?.skipped || hasLoggedValue(entry)) return true;
+    if (habit.direction !== 'atMost') return false;
+    const progress = getHabitPeriodProgress(habit, date, state);
+    return progress.hasEntry && progress.value > progress.target;
   });
   let completed = 0;
   let skipped = 0;
@@ -187,7 +242,9 @@ export function getDaySnapshot(state: TrackerState, date: Date, habits = state.h
     }
 
     denominator += 1;
-    const ratio = getDayContributionRatio(habit, date, state) ?? 0;
+    const ratio = habit.direction === 'atMost' && habit.period !== 'day'
+      ? getHabitPeriodProgress(habit, date, state).ratio
+      : getDayContributionRatio(habit, date, state) ?? 0;
     ratioTotal += ratio;
     if (hasLoggedValue(entry)) logged += 1;
 

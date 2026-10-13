@@ -13,6 +13,7 @@ import {
   toDateKey,
 } from '../dates';
 import {
+  describeHabitHeatCell,
   getDayContributionRatio,
   getDaySnapshot,
   getEntry,
@@ -21,7 +22,7 @@ import {
   isHabitActiveOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { EmptyState, HabitBadge, MetricCard, ViewHeader, habitStyle } from '../ui';
+import { EmptyState, HabitBadge, MetricCard, ViewHeader, habitStyle, themeHabitColor } from '../ui';
 import { useMediaQuery } from '../useMediaQuery';
 import { useSwipeNavigation } from '../useSwipe';
 
@@ -54,7 +55,7 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
     : filter.startsWith('category:')
       ? historicalHabits.filter((habit) => habit.category === filter.slice('category:'.length))
       : historicalHabits.filter((habit) => habit.id === filter.slice('habit:'.length));
-  const heatColor = filteredHabits[0]?.color ?? '#b8f35b';
+  const heatColor = themeHabitColor(filteredHabits[0]?.color ?? '#b8f35b');
   const todayKey = toDateKey(new Date());
   const today = fromDateKey(todayKey);
   const currentWindow = date.getFullYear() === today.getFullYear();
@@ -76,9 +77,43 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
   function ratioForDay(day: Date) {
     if (!filteredHabits.length) return 0;
     if (filteredHabits.length === 1 && filter.startsWith('habit:')) {
-      return getDayContributionRatio(filteredHabits[0], day, state) ?? 0;
+      return describeHabitHeatCell(filteredHabits[0], day, state).ratio ?? 0;
     }
     return getDaySnapshot(state, day, filteredHabits).score;
+  }
+
+  function heatPaint(day: Date, future: boolean) {
+    if (future) return { level: 0, off: false, skipped: false, hasSkip: false, ratio: 0, logged: 0 };
+    const single = filteredHabits.length === 1 && filter.startsWith('habit:');
+    if (single) {
+      const mark = describeHabitHeatCell(filteredHabits[0], day, state);
+      const snapshot = getDaySnapshot(state, day, filteredHabits);
+      return {
+        level: mark.ratio == null ? 0 : getIntensityLevel(mark.ratio),
+        off: mark.off,
+        skipped: mark.skipped,
+        hasSkip: mark.skipped,
+        ratio: mark.ratio ?? 0,
+        logged: snapshot.logged,
+      };
+    }
+    const snapshot = getDaySnapshot(state, day, filteredHabits);
+    const rest = snapshot.scheduled === 0 && snapshot.skipped === 0;
+    return {
+      level: snapshot.scheduled > 0 ? getIntensityLevel(snapshot.score) : 0,
+      off: rest,
+      skipped: snapshot.skipped > 0 && snapshot.scheduled === 0,
+      hasSkip: snapshot.skipped > 0,
+      ratio: snapshot.score,
+      logged: snapshot.logged,
+    };
+  }
+
+  function heatLabel(day: Date, future: boolean, paint: ReturnType<typeof heatPaint>) {
+    if (future) return `${formatCompactDate(day)}, future day`;
+    if (paint.off) return `${formatCompactDate(day)}, off schedule`;
+    if (paint.skipped && paint.logged === 0) return `${formatCompactDate(day)}, skipped`;
+    return `${formatCompactDate(day)}: ${paint.logged} entries, ${Math.round(paint.ratio * 100)} percent`;
   }
 
   const elapsed = days.filter((day) => !isAfterDate(day, today));
@@ -210,18 +245,14 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
                 {row.days.map((day, index) => {
                   if (!day) return <i className="heat-void" key={index} aria-hidden="true" />;
                   const future = isAfterDate(day, today);
-                  const ratio = future ? 0 : ratioForDay(day);
-                  const snapshot = getDaySnapshot(state, day, filteredHabits);
-                  const level = getIntensityLevel(ratio);
+                  const paint = heatPaint(day, future);
                   const selected = isSameDate(day, selectedDate);
-                  const label = future
-                    ? `${formatCompactDate(day)}, future day`
-                    : `${formatCompactDate(day)}: ${snapshot.logged} entries, ${Math.round(ratio * 100)} percent`;
+                  const label = heatLabel(day, future, paint);
                   return (
                     <button
                       type="button"
                       role="gridcell"
-                      className={`heat-cell level-${level}${future ? ' is-future' : ''}${selected ? ' is-selected' : ''}${snapshot.skipped ? ' has-skip' : ''}`}
+                      className={`heat-cell level-${paint.level}${future ? ' is-future' : ''}${selected ? ' is-selected' : ''}${paint.off ? ' is-off' : ''}${paint.skipped ? ' is-skipped' : ''}${paint.hasSkip ? ' has-skip' : ''}`}
                       data-heat-key={toDateKey(day)}
                       key={toDateKey(day)}
                       onClick={() => setSelectedDate(day)}
@@ -254,18 +285,14 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
                       const day = week[rowIndex];
                       const index = weekIndex * 7 + rowIndex;
                       const future = isAfterDate(day, today);
-                      const ratio = future ? 0 : ratioForDay(day);
-                      const snapshot = getDaySnapshot(state, day, filteredHabits);
-                      const level = getIntensityLevel(ratio);
+                      const paint = heatPaint(day, future);
                       const selected = isSameDate(day, selectedDate);
-                      const label = future
-                        ? `${formatCompactDate(day)}, future day`
-                        : `${formatCompactDate(day)}: ${snapshot.logged} entries, ${Math.round(ratio * 100)} percent`;
+                      const label = heatLabel(day, future, paint);
                       return (
                         <button
                           type="button"
                           role="gridcell"
-                          className={`heat-cell level-${level}${future ? ' is-future' : ''}${selected ? ' is-selected' : ''}${snapshot.skipped ? ' has-skip' : ''}`}
+                          className={`heat-cell level-${paint.level}${future ? ' is-future' : ''}${selected ? ' is-selected' : ''}${paint.off ? ' is-off' : ''}${paint.skipped ? ' is-skipped' : ''}${paint.hasSkip ? ' has-skip' : ''}`}
                           data-heat-index={index}
                           key={toDateKey(day)}
                           onClick={() => setSelectedDate(day)}

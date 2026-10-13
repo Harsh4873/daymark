@@ -107,7 +107,7 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
     <div className="view-shell review-view week-view" {...swipe}>
       <ViewHeader
         title="Week"
-        sub={`${goalsMet}/${goalsDue} goals met · ${activeDays}/7 active days`}
+        sub={`${goalsMet}/${goalsDue} goals met · ${activeDays}/${elapsedSnapshots.length} active days`}
       >
         <DateSwitcher
           compact

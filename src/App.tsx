@@ -46,6 +46,7 @@ const SYNC_PRESENTATION: Record<SyncStatus, { label: string; icon: LucideIcon }>
   synced: { label: 'Synced', icon: Cloud },
   syncing: { label: 'Syncing', icon: LoaderCircle },
   offline: { label: 'Offline', icon: CloudOff },
+  local: { label: 'On this device', icon: HardDrive },
   'action-needed': { label: 'Action needed', icon: CircleAlert },
 };
 
@@ -216,8 +217,8 @@ export default function App() {
           <button
             type="button"
             className={`sync-status sync-status-${sync.status}`}
-            title={sync.message ?? `${syncPresentation.label}. Open sync settings.`}
-            aria-label={`${syncPresentation.label}. Open sync settings.`}
+            title={sync.message ?? syncPresentation.label}
+            aria-label={sync.message ? `${syncPresentation.label}. ${sync.message}` : `${syncPresentation.label}. Open sync settings.`}
             onClick={() => navigate('profile')}
           >
             <SyncIcon aria-hidden="true" />

@@ -10,6 +10,7 @@ import {
   Database,
   Download,
   Edit3,
+  HardDrive,
   LoaderCircle,
   LockKeyhole,
   LogIn,
@@ -37,7 +38,7 @@ import {
   type TrackerState,
 } from '../model';
 import { parseTrackerState, type TrackerStore } from '../store';
-import { HabitBadge, ProgressBar, ViewHeader, habitStyle, useModalDialog } from '../ui';
+import { HabitBadge, ProgressBar, ViewHeader, habitStyle, themeHabitColor, useBackdropDismiss, useModalDialog } from '../ui';
 import type { DaymarkSync, GenerationConflictChoice, SyncStatus } from '../useDaymarkSync';
 
 interface ProfileViewProps {
@@ -58,6 +59,7 @@ const SYNC_PRESENTATION: Record<SyncStatus, { label: string; icon: LucideIcon }>
   synced: { label: 'Synced', icon: Cloud },
   syncing: { label: 'Syncing', icon: LoaderCircle },
   offline: { label: 'Offline', icon: CloudOff },
+  local: { label: 'On this device', icon: HardDrive },
   'action-needed': { label: 'Action needed', icon: CircleAlert },
 };
 
@@ -153,6 +155,7 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
   const dialogRef = useRef<HTMLElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const mode = scheduleMode(habit.schedule);
+  const dismissBackdrop = useBackdropDismiss(onClose);
   useModalDialog(dialogRef, onClose, nameInputRef);
 
   function update(patch: Partial<Habit>) {
@@ -212,7 +215,7 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
   }
 
   return createPortal(
-    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+    <div className="dialog-backdrop" role="presentation" {...dismissBackdrop}>
       <section ref={dialogRef} className="habit-dialog" role="dialog" aria-modal="true" aria-labelledby="habit-dialog-title">
         <header>
           <div><span>Habit profile</span><h2 id="habit-dialog-title">{initial.name ? `Edit ${initial.name}` : 'Create a habit'}</h2></div>
@@ -252,7 +255,7 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
             </div>
             <div className="color-picker" role="group" aria-label="Habit color">
               {HABIT_COLORS.map((color) => (
-                <button type="button" className={habit.color === color ? 'selected' : ''} style={{ background: color }} onClick={() => update({ color })} key={color} aria-label={`Use color ${color}`} aria-pressed={habit.color === color} />
+                <button type="button" className={habit.color === color ? 'selected' : ''} style={{ background: themeHabitColor(color) }} onClick={() => update({ color })} key={color} aria-label={`Use color ${color}`} aria-pressed={habit.color === color} />
               ))}
             </div>
           </fieldset>
@@ -371,8 +374,16 @@ function downloadText(filename: string, text: string, type: string) {
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = filename;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  // Safari drops the file if the element is detached or the URL is revoked
+  // before the download starts. Keep both alive past this turn.
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 4000);
 }
 
 function csvCell(value: string | number | undefined) {
@@ -534,9 +545,9 @@ export function ProfileView({
 
   function resetAll() {
     const scope = sync.user ? 'across every signed-in device' : 'on this device';
-    if (window.confirm(`Reset Daymark ${scope}? This removes all current entries and restores the starter habits. Export a backup first if you may want this history later.`)) {
+    if (window.confirm(`Reset Daymark ${scope}? This deletes every habit and entry and leaves an empty tracker. Export a backup first if you may want this history later.`)) {
       resetState();
-      setDataMessage(`Daymark was reset to the starter habits${sync.user ? '; the reset will propagate across your devices' : ''}.`);
+      setDataMessage(`Daymark was cleared${sync.user ? '; the empty record will propagate across your devices' : ''}.`);
     }
   }
 

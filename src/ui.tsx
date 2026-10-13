@@ -1,8 +1,46 @@
 import { ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react';
 import { useEffect, useRef } from 'react';
-import type { CSSProperties, ReactNode, RefObject } from 'react';
-import type { Habit } from './model';
+import type { CSSProperties, MouseEvent, ReactNode, RefObject } from 'react';
 import { HabitGlyph } from './icons';
+import { HABIT_COLORS, type Habit } from './model';
+
+const HABIT_COLOR_VARS = [
+  '--habit-lime',
+  '--habit-violet',
+  '--habit-coral',
+  '--habit-cyan',
+  '--habit-gold',
+  '--habit-pink',
+  '--habit-mint',
+  '--habit-blue',
+] as const;
+
+/** Palette colors follow the active theme. Stored hexes stay stable for sync and backups. */
+export function themeHabitColor(color: string) {
+  const index = HABIT_COLORS.findIndex((item) => item.toLowerCase() === color.toLowerCase());
+  if (index === -1) return color;
+  return `var(${HABIT_COLOR_VARS[index]})`;
+}
+
+/**
+ * Closes on a click that both starts and ends on the scrim. A scrollbar press
+ * does not emit a click, and a drag that begins inside the dialog does not dismiss it.
+ */
+export function useBackdropDismiss(onClose: () => void) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const armed = useRef(false);
+  return {
+    onMouseDown(event: MouseEvent<HTMLElement>) {
+      armed.current = event.target === event.currentTarget;
+    },
+    onClick(event: MouseEvent<HTMLElement>) {
+      const dismiss = armed.current && event.target === event.currentTarget;
+      armed.current = false;
+      if (dismiss) onCloseRef.current();
+    },
+  };
+}
 
 const FOCUSABLE_SELECTOR = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
@@ -78,7 +116,7 @@ type HabitStyle = CSSProperties & { '--habit-color': string };
 type ProgressStyle = CSSProperties & { '--progress': string };
 
 export function habitStyle(habit: Habit): HabitStyle {
-  return { '--habit-color': habit.color };
+  return { '--habit-color': themeHabitColor(habit.color) };
 }
 
 export function ProgressRing({ value, size = 'large', children }: { value: number; size?: 'small' | 'large'; children: ReactNode }) {
@@ -166,18 +204,18 @@ export function MetricCard({ label, value, detail, accent = false }: { label: st
   );
 }
 
-export function ProgressBar({ value, color, label }: { value: number; color?: string; label?: string }) {
-  const safe = Math.max(0, Math.min(1, value));
+export function ProgressBar({ value, color, label, over = false }: { value: number; color?: string; label?: string; over?: boolean }) {
+  const safe = Math.max(0, Math.min(1, over ? 1 : value));
   return (
     <div
-      className="linear-progress"
+      className={over ? 'linear-progress is-over' : 'linear-progress'}
       role="progressbar"
       aria-label={label ?? 'Progress'}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(safe * 100)}
     >
-      <span style={{ width: `${safe * 100}%`, background: color }} />
+      <span style={{ width: `${safe * 100}%`, background: over ? 'var(--danger)' : color ? themeHabitColor(color) : undefined }} />
     </div>
   );
 }

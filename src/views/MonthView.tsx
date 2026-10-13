@@ -19,7 +19,7 @@ import {
   isHabitScheduledOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, ViewHeader, habitStyle } from '../ui';
+import { DateSwitcher, HabitBadge, MetricCard, ProgressBar, ViewHeader, habitStyle, themeHabitColor } from '../ui';
 import { useSwipeNavigation } from '../useSwipe';
 
 interface MonthViewProps {
@@ -77,7 +77,7 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
     return {
       category,
       value: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0,
-      color: categoryHabits[0]?.color ?? '#b8f35b',
+      color: themeHabitColor(categoryHabits[0]?.color ?? '#b8f35b'),
       count: categoryHabits.length,
     };
   }).sort((left, right) => right.value - left.value);
@@ -120,9 +120,11 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
               const outside = day.getMonth() !== date.getMonth();
               const future = isAfterDate(day, new Date());
               const snapshot = getDaySnapshot(state, day, visibleHabits);
-              const level = getIntensityLevel(snapshot.score);
+              const level = future || snapshot.scheduled === 0 ? 0 : getIntensityLevel(snapshot.score);
               const loggedHabits = visibleHabits.filter((habit) => Boolean(getEntry(state, habit.id, day))).slice(0, 4);
-              const label = `${day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}: ${snapshot.logged} logs, ${Math.round(snapshot.score * 100)} percent day score`;
+              const label = future
+                ? `${day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}, upcoming`
+                : `${day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}: ${snapshot.logged} logs, ${snapshot.scheduled ? `${Math.round(snapshot.score * 100)} percent day score` : 'rest day'}`;
               return (
                 <button
                   type="button"
@@ -133,9 +135,9 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
                   aria-label={label}
                 >
                   <span className="month-day-number">{day.getDate()}</span>
-                  <span className="month-day-score">{snapshot.scheduled ? `${Math.round(snapshot.score * 100)}%` : 'rest'}</span>
+                  <span className="month-day-score">{future ? '' : snapshot.scheduled ? `${Math.round(snapshot.score * 100)}%` : 'rest'}</span>
                   <span className="month-day-dots" aria-hidden="true">
-                    {loggedHabits.map((habit) => <i key={habit.id} style={{ background: habit.color }} />)}
+                    {loggedHabits.map((habit) => <i key={habit.id} style={{ background: themeHabitColor(habit.color) }} />)}
                   </span>
                 </button>
               );

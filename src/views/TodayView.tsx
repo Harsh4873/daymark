@@ -10,17 +10,18 @@ import {
   SkipForward,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { addDays, formatFullDate, isSameDate, isToday, toDateKey } from '../dates';
+import { addDays, formatFullDate, getWeekDays, isAfterDate, isSameDate, isToday, toDateKey } from '../dates';
 import {
   formatValue,
   getDaySnapshot,
   getEntry,
+  getHabitDayAttention,
   getHabitPeriodProgress,
   getHabitStats,
   getIntensityLevel,
-  isHabitHandledOn,
   isHabitScheduledOn,
   reachedMilestone,
+  type HabitDayAttention,
 } from '../metrics';
 import type { Habit, TimeSlot, TrackerState } from '../model';
 import type { TrackerStore } from '../store';
@@ -75,7 +76,10 @@ function HabitRow({
   date,
   state,
   streak,
+  settled,
   openHabitDetail,
+  onHold,
+  onRelease,
   setEntryValue,
   incrementEntry,
   toggleCheck,
@@ -86,27 +90,46 @@ function HabitRow({
   date: Date;
   state: TrackerState;
   streak: number;
+  settled: boolean;
   openHabitDetail: (habit: Habit) => void;
+  onHold: (habitId: string) => void;
+  onRelease: (habitId: string) => void;
 } & EntryActions) {
   const [expanded, setExpanded] = useState(false);
   const [popped, setPopped] = useState(false);
+  const rowRef = useRef<HTMLElement>(null);
+  const releaseRef = useRef(onRelease);
+  releaseRef.current = onRelease;
   const dateKey = toDateKey(date);
   const entry = getEntry(state, habit.id, date);
   const progress = getHabitPeriodProgress(habit, date, state);
   const dayChecked = Boolean(entry && !entry.skipped && entry.value > 0);
   const displayValue = habit.period === 'day' ? entry?.value ?? 0 : progress.value;
   const milestone = reachedMilestone(streak);
-  const prevComplete = useRef(progress.complete);
+  const overCap = habit.direction === 'atMost' && progress.hasEntry && progress.value > progress.target;
+  const prevSettled = useRef(settled);
 
   useEffect(() => {
-    const wasComplete = prevComplete.current;
-    prevComplete.current = progress.complete;
-    if (progress.complete && !wasComplete) {
+    const wasSettled = prevSettled.current;
+    prevSettled.current = settled;
+    if (settled && !wasSettled) {
       setPopped(true);
       const timeout = window.setTimeout(() => setPopped(false), 600);
       return () => window.clearTimeout(timeout);
     }
-  }, [progress.complete]);
+  }, [settled]);
+
+  useEffect(() => {
+    function onDocumentPointerUp(event: PointerEvent) {
+      const row = rowRef.current;
+      const target = event.target;
+      if (!row || !(target instanceof Node) || row.contains(target)) return;
+      // After the click, so a tap on another row is not lost to a layout shift.
+      window.setTimeout(() => releaseRef.current(habit.id), 0);
+    }
+    document.addEventListener('pointerup', onDocumentPointerUp);
+    return () => document.removeEventListener('pointerup', onDocumentPointerUp);
+  }, [habit.id]);
 
   const statusLine = entry?.skipped
     ? 'Skipped — excluded from consistency'
@@ -114,7 +137,7 @@ function HabitRow({
       ? `Ramp-up ${habit.period} — activity counts, consistency does not`
       : habit.direction === 'atMost'
         ? progress.hasEntry
-          ? progress.value <= habit.target
+          ? progress.value <= progress.target
             ? `Within the ${habit.period} limit`
             : `Over the ${habit.period} limit`
           : 'Log the actual amount'
@@ -128,14 +151,23 @@ function HabitRow({
   }
 
   function quickAdd() {
-    if (!progress.complete) buzz();
+    if (!settled) buzz();
     incrementEntry(habit.id, dateKey, habit.increment);
   }
 
   return (
     <article
-      className={`habit-row${progress.complete ? ' is-complete' : ''}${entry?.skipped ? ' is-skipped' : ''}${popped ? ' just-completed' : ''}`}
+      ref={rowRef}
+      className={`habit-row${settled ? ' is-complete' : ''}${entry?.skipped ? ' is-skipped' : ''}${popped ? ' just-completed' : ''}`}
       style={habitStyle(habit)}
+      onFocus={() => onHold(habit.id)}
+      onPointerDown={() => onHold(habit.id)}
+      onBlur={(event) => {
+        const row = event.currentTarget;
+        window.setTimeout(() => {
+          if (!row.isConnected || !row.contains(document.activeElement)) onRelease(habit.id);
+        }, 0);
+      }}
     >
       <button
         type="button"
@@ -156,13 +188,18 @@ function HabitRow({
             )}
           </span>
           <span className="habit-row-progress">
-            <ProgressBar value={progress.ratio} color={habit.color} label={`${habit.name}: ${Math.round(progress.ratio * 100)} percent of goal`} />
+            <ProgressBar
+              value={progress.ratio}
+              color={habit.color}
+              over={overCap}
+              label={overCap ? `${habit.name}: over the ${habit.period} limit` : `${habit.name}: ${Math.round(progress.ratio * 100)} percent of goal`}
+            />
             <small>
               {entry?.skipped
                 ? 'skipped'
                 : habit.metric === 'check' && habit.period === 'day'
                   ? dayChecked ? 'done' : 'not yet'
-                  : `${formatValue(displayValue, habit)} / ${formatValue(habit.target, habit)}`}
+                  : `${formatValue(displayValue, habit)} / ${formatValue(progress.target, habit)}`}
             </small>
           </span>
         </span>
@@ -251,34 +288,97 @@ export function TodayView({
   ...actions
 }: TodayViewProps) {
   const [doneOpen, setDoneOpen] = useState(false);
+  const [pins, setPins] = useState<Map<string, 'open' | 'done' | 'optional'>>(new Map());
   const eligible = habits.filter((habit) => isHabitScheduledOn(habit, date));
   const snapshot = getDaySnapshot(state, date, habits);
   const dateIsToday = isToday(date);
+  const dateKey = toDateKey(date);
   const activeStats = useMemo(
     () => habits.map((habit) => ({ habit, stats: getHabitStats(habit, state, date) })),
     [habits, state, date],
   );
   const streakByHabit = new Map(activeStats.map(({ habit, stats }) => [habit.id, stats.currentStreak]));
-  const stripDays = Array.from({ length: 7 }, (_, index) => addDays(new Date(), index - 6));
+  const stripDays = getWeekDays(date, state.profile.weekStartsOn);
   const swipe = useSwipeNavigation(
     () => setDate(addDays(date, -1)),
     dateIsToday ? undefined : () => setDate(addDays(date, 1)),
   );
 
-  const remaining = eligible.filter((habit) => !isHabitHandledOn(habit, date, state));
-  const done = eligible.filter((habit) => isHabitHandledOn(habit, date, state));
-  const dayComplete = eligible.length > 0 && remaining.length === 0;
+  useEffect(() => {
+    setPins(new Map());
+  }, [dateKey]);
+
+  function attentionFor(habit: Habit): HabitDayAttention {
+    return getHabitDayAttention(habit, date, state);
+  }
+
+  function classify(habit: Habit): 'open' | 'done' | 'optional' {
+    const attention = attentionFor(habit);
+    if (attention === 'open' || attention === 'optional') return attention;
+    if (habit.period !== 'day' && habit.direction !== 'atMost') {
+      const progress = getHabitPeriodProgress(habit, date, state);
+      if (!progress.complete && !getEntry(state, habit.id, date)?.skipped) return 'optional';
+    }
+    return 'done';
+  }
+
+  function holdHabit(habitId: string) {
+    const habit = eligible.find((item) => item.id === habitId);
+    if (!habit) return;
+    const section = classify(habit);
+    setPins((current) => {
+      if (current.has(habitId)) return current;
+      const next = new Map(current);
+      next.set(habitId, section);
+      return next;
+    });
+  }
+
+  function releaseHabit(habitId: string) {
+    setPins((current) => {
+      if (!current.has(habitId)) return current;
+      const next = new Map(current);
+      next.delete(habitId);
+      return next;
+    });
+  }
+
+  function sectionFor(habit: Habit) {
+    return pins.get(habit.id) ?? classify(habit);
+  }
+
+  const remaining = eligible.filter((habit) => sectionFor(habit) === 'open');
+  const optional = eligible.filter((habit) => sectionFor(habit) === 'optional');
+  const done = eligible.filter((habit) => sectionFor(habit) === 'done');
+  const unsettled = eligible.filter((habit) => attentionFor(habit) === 'open');
+  const satisfied = eligible.filter((habit) => {
+    if (attentionFor(habit) !== 'satisfied' || getEntry(state, habit.id, date)?.skipped) return false;
+    if (habit.period !== 'day' && habit.direction !== 'atMost' && !getHabitPeriodProgress(habit, date, state).complete) return false;
+    return true;
+  });
+  const dailyDue = eligible.filter((habit) => habit.period === 'day');
+  const dayComplete = dailyDue.length > 0
+    && unsettled.length === 0
+    && dailyDue.every((habit) => attentionFor(habit) === 'satisfied');
+  const ringScore = snapshot.scheduled > 0
+    ? snapshot.score
+    : unsettled.length === 0 && satisfied.length > 0
+      ? 1
+      : 0;
   const focusSlot = currentSlot();
 
   function renderRow(habit: Habit) {
     return (
       <HabitRow
-        key={`${habit.id}-${toDateKey(date)}`}
+        key={`${habit.id}-${dateKey}`}
         habit={habit}
         date={date}
         state={state}
         streak={streakByHabit.get(habit.id) ?? 0}
+        settled={attentionFor(habit) === 'satisfied'}
         openHabitDetail={openHabitDetail}
+        onHold={holdHabit}
+        onRelease={releaseHabit}
         {...actions}
       />
     );
@@ -288,10 +388,10 @@ export function TodayView({
     <div className="view-shell today-view" {...swipe}>
       <ViewHeader
         title={dateIsToday ? 'Today' : date.toLocaleDateString('en-US', { weekday: 'long' })}
-        sub={`${formatFullDate(date)} · ${remaining.length} left · ${snapshot.completed} done${snapshot.skipped ? ` · ${snapshot.skipped} skipped` : ''}`}
+        sub={`${formatFullDate(date)} · ${unsettled.length} left · ${satisfied.length} done${snapshot.skipped ? ` · ${snapshot.skipped} skipped` : ''}`}
       >
-        <ProgressRing value={snapshot.score} size="small">
-          <strong>{Math.round(snapshot.score * 100)}%</strong>
+        <ProgressRing value={ringScore} size="small">
+          <strong>{Math.round(ringScore * 100)}%</strong>
         </ProgressRing>
         <DateSwitcher
           compact
@@ -304,10 +404,11 @@ export function TodayView({
         />
       </ViewHeader>
 
-      <section className="week-strip" aria-label="The last seven days">
+      <section className="week-strip" aria-label={`Week of ${stripDays[0].toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}`}>
         {stripDays.map((day) => {
           const daySnapshot = getDaySnapshot(state, day);
-          const level = getIntensityLevel(daySnapshot.scheduled > 0 ? daySnapshot.score : 0);
+          const future = isAfterDate(day, new Date());
+          const level = future || daySnapshot.scheduled === 0 ? 0 : getIntensityLevel(daySnapshot.score);
           const selected = isSameDate(day, date);
           return (
             <button
@@ -315,8 +416,11 @@ export function TodayView({
               className={selected ? 'week-strip-day is-selected' : 'week-strip-day'}
               key={toDateKey(day)}
               onClick={() => setDate(day)}
+              disabled={future}
               aria-current={selected ? 'date' : undefined}
-              aria-label={`${formatFullDate(day)}: ${daySnapshot.scheduled > 0 ? `${Math.round(daySnapshot.score * 100)} percent day score` : 'rest day'}`}
+              aria-label={future
+                ? `${formatFullDate(day)}, upcoming`
+                : `${formatFullDate(day)}: ${daySnapshot.scheduled > 0 ? `${Math.round(daySnapshot.score * 100)} percent day score` : 'rest day'}`}
             >
               <span>{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
               <strong>{day.getDate()}</strong>
@@ -339,7 +443,7 @@ export function TodayView({
             <div className="day-complete" role="status">
               <CheckCircle2 aria-hidden="true" />
               <strong>Day complete</strong>
-              <span>{snapshot.completed} goals · {Math.round(snapshot.score * 100)}%</span>
+              <span>{satisfied.length} goals · {Math.round(ringScore * 100)}%</span>
             </div>
           )}
 
@@ -359,6 +463,19 @@ export function TodayView({
               </section>
             );
           })}
+
+          {optional.length > 0 && (
+            <section className="checkin-section is-optional" aria-label="Flexible goals">
+              <div className="slot-label">
+                <h2>When you can</h2>
+                <small>{optional.length}</small>
+              </div>
+              <p className="optional-note">Weekly and monthly goals stay off today's remaining count.</p>
+              <div className="habit-row-list">
+                {optional.map(renderRow)}
+              </div>
+            </section>
+          )}
 
           {done.length > 0 && (
             <section className="done-section">

@@ -17,6 +17,14 @@
   --coral: #ff8e64;
   --cyan: #58c9d6;
   --danger: #ff7777;
+  --habit-lime: #b8f35b;
+  --habit-violet: #8d7cff;
+  --habit-coral: #ff8e64;
+  --habit-cyan: #58c9d6;
+  --habit-gold: #f4c95d;
+  --habit-pink: #f47ea8;
+  --habit-mint: #69d69c;
+  --habit-blue: #73a7ff;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.24);
   --radius-sm: 10px;
   --radius: 16px;
@@ -49,6 +57,14 @@
   --coral: #db643d;
   --cyan: #238f9d;
   --danger: #c94444;
+  --habit-lime: #58752c;
+  --habit-violet: #6b5ec2;
+  --habit-coral: #a1593f;
+  --habit-cyan: #33767d;
+  --habit-gold: #806a31;
+  --habit-pink: #a25470;
+  --habit-mint: #3b7857;
+  --habit-blue: #4b6da6;
   --shadow: 0 24px 70px rgba(31, 45, 33, 0.11);
 }
 
@@ -67,6 +83,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   color: var(--text);
   background:
     radial-gradient(circle at 9% -8%, color-mix(in srgb, var(--violet) 10%, transparent), transparent 31rem),
@@ -175,6 +193,7 @@ svg {
   position: sticky;
   top: 0;
   z-index: 80;
+  padding-top: env(safe-area-inset-top);
   display: grid;
   grid-template-columns: minmax(210px, 0.75fr) minmax(530px, 1.7fr) minmax(170px, 0.6fr);
   align-items: center;
@@ -326,7 +345,7 @@ svg {
   border-radius: 11px;
   color: var(--text-soft);
   background: color-mix(in srgb, var(--coral) 7%, var(--surface));
-  font-size: 9px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
@@ -384,7 +403,8 @@ svg {
   --sync-color: var(--cyan);
 }
 
-.sync-status-offline {
+.sync-status-offline,
+.sync-status-local {
   --sync-color: var(--text-muted);
 }
 
@@ -1173,6 +1193,11 @@ main {
   background: var(--habit-color);
 }
 
+:root[data-theme='light'] .row-check.is-done,
+:root[data-theme='light'] .milestone-chip.is-active {
+  color: var(--green-ink);
+}
+
 .habit-row.just-completed .row-action {
   animation: action-pop 480ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -1220,6 +1245,13 @@ main {
   height: auto;
   overflow: visible;
   clip: auto;
+}
+
+.optional-note {
+  margin: 0 2px 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .done-section {
@@ -1305,21 +1337,21 @@ main {
 .value-stepper label {
   display: flex;
   align-items: center;
-  min-width: 105px;
+  min-width: 8.75rem;
   padding: 0 8px;
   border-right: 1px solid var(--line);
   border-left: 1px solid var(--line);
 }
 
 .value-stepper input {
-  width: 62px;
+  width: 4.5rem;
   padding: 0;
   border: 0;
   outline: 0;
   color: var(--text);
   background: transparent;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 16px;
   font-weight: 700;
   text-align: right;
 }
@@ -1393,7 +1425,7 @@ main {
   outline: 0;
   color: var(--text);
   background: var(--surface-2);
-  font-size: 11px;
+  font-size: 16px;
   line-height: 1.5;
 }
 
@@ -1614,7 +1646,7 @@ main {
   border: 0;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  color: var(--green-ink);
+  color: var(--text);
   background: var(--surface);
   font-size: 12px;
   font-weight: 900;
@@ -1649,6 +1681,10 @@ main {
 
 .matrix-cell.level-3::before {
   background: color-mix(in srgb, var(--habit-color) 73%, var(--surface-3));
+}
+
+.matrix-cell.level-4 {
+  color: var(--green-ink);
 }
 
 .matrix-cell.level-4::before {
@@ -2046,7 +2082,7 @@ main {
   outline: 0;
   color: var(--text);
   background: var(--surface);
-  font-size: 11px;
+  font-size: 16px;
 }
 
 .filter-select select:focus,
@@ -2150,13 +2186,15 @@ main {
 }
 
 .heatmap-scroll {
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .heatmap-months {
   display: grid;
-  grid-template-columns: repeat(53, minmax(0, 1fr));
+  grid-template-columns: repeat(53, minmax(24px, 1fr));
   gap: 4px;
+  width: max(100%, calc(53 * 24px + 52 * 4px));
   height: 23px;
 }
 
@@ -2175,8 +2213,9 @@ main {
 
 .heatmap-row {
   display: grid;
-  grid-template-columns: repeat(53, minmax(0, 1fr));
+  grid-template-columns: repeat(53, minmax(24px, 1fr));
   gap: 4px;
+  width: max(100%, calc(53 * 24px + 52 * 4px));
 }
 
 .heat-cell {
@@ -2206,6 +2245,18 @@ main {
   background: transparent;
 }
 
+.heat-cell.is-off {
+  opacity: 1;
+  border-color: var(--line);
+  background: repeating-linear-gradient(135deg, var(--surface-3), var(--surface-3) 3px, transparent 3px, transparent 6px);
+}
+
+.heat-cell.is-skipped {
+  border-style: dashed;
+  border-color: var(--text-muted);
+  background: transparent;
+}
+
 .heat-cell.has-skip::after {
   position: absolute;
   top: 3px;
@@ -2221,13 +2272,15 @@ main {
   display: grid;
   gap: 3px;
   padding: 18px 14px 15px;
+  overflow-x: auto;
 }
 
 .heatmap-month-row {
   display: grid;
-  grid-template-columns: 34px repeat(31, minmax(0, 1fr));
+  grid-template-columns: 2.5rem repeat(31, minmax(1.5rem, 1fr));
   gap: 3px;
   align-items: center;
+  width: max(100%, calc(2.5rem + 31 * 1.5rem + 30 * 3px));
 }
 
 .heatmap-month-label {
@@ -2455,7 +2508,8 @@ main {
   --sync-color: var(--cyan);
 }
 
-.sync-panel-offline {
+.sync-panel-offline,
+.sync-panel-local {
   --sync-color: var(--text-muted);
 }
 
@@ -2605,8 +2659,8 @@ main {
   max-width: 780px;
   margin: 12px 0 0;
   color: var(--text-muted);
-  font-size: 9px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .sync-panel-action {
@@ -3538,7 +3592,7 @@ main {
 
 @media (max-width: 930px) {
   body {
-    padding-bottom: 72px;
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
   }
 
   .app-header {
@@ -4146,7 +4200,7 @@ main {
   }
 
   .value-stepper label {
-    min-width: 90px;
+    min-width: 8rem;
   }
 
   .mobile-nav {

@@ -1,5 +1,5 @@
 import { Edit3, Flame, Medal, X } from 'lucide-react';
-import { useMemo, useRef, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
   addDays,
@@ -12,9 +12,9 @@ import {
 } from '../dates';
 import {
   STREAK_MILESTONES,
+  describeHabitHeatCell,
   formatNumber,
   formatValue,
-  getDayContributionRatio,
   getHabitStats,
   getHabitStrength,
   getIntensityLevel,
@@ -25,7 +25,7 @@ import {
   scheduleLabel,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
-import { HabitBadge, habitStyle, useModalDialog } from '../ui';
+import { HabitBadge, habitStyle, themeHabitColor, useBackdropDismiss, useModalDialog } from '../ui';
 
 type HeatStyle = CSSProperties & { '--heat-color': string };
 
@@ -41,6 +41,7 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function HabitDetail({ habit, state, onClose, onEdit, openDay }: HabitDetailProps) {
   const dialogRef = useRef<HTMLElement>(null);
+  const dismissBackdrop = useBackdropDismiss(onClose);
   useModalDialog(dialogRef, onClose);
 
   const today = fromDateKey(toDateKey(new Date()));
@@ -86,16 +87,75 @@ export function HabitDetail({ habit, state, onClose, onEdit, openDay }: HabitDet
   }, [state.entries, habit.id]);
 
   const upcoming = nextMilestone(stats.currentStreak);
+  const [heatKey, setHeatKey] = useState<string | null>(null);
+  const enabledHeatKeys = days
+    .filter((day) => !isAfterDate(day, today) && isHabitScheduledOn(habit, day))
+    .map((day) => toDateKey(day));
+  const activeHeatKey = heatKey && enabledHeatKeys.includes(heatKey)
+    ? heatKey
+    : enabledHeatKeys[enabledHeatKeys.length - 1] ?? null;
+
+  function heatEnabled(day: Date) {
+    const key = toDateKey(day);
+    const first = toDateKey(days[0]);
+    const last = toDateKey(days[days.length - 1]);
+    return key >= first && key <= last && !isAfterDate(day, today) && isHabitScheduledOn(habit, day);
+  }
+
+  function stepHeatDay(day: Date, key: string) {
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const direction = key === 'ArrowLeft' ? -1 : 1;
+      let cursor = addDays(day, direction);
+      for (let guard = 0; guard < 40; guard += 1) {
+        if (toDateKey(cursor) < toDateKey(days[0]) || toDateKey(cursor) > toDateKey(days[days.length - 1])) return null;
+        if (heatEnabled(cursor)) return cursor;
+        cursor = addDays(cursor, direction);
+      }
+      return null;
+    }
+    if (key !== 'ArrowUp' && key !== 'ArrowDown') return null;
+    const direction = key === 'ArrowUp' ? -1 : 1;
+    for (let monthOffset = direction; Math.abs(monthOffset) <= 14; monthOffset += direction) {
+      const month = new Date(day.getFullYear(), day.getMonth() + monthOffset, 1, 12);
+      const length = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
+      const cursor = new Date(month.getFullYear(), month.getMonth(), Math.min(day.getDate(), length), 12);
+      if (heatEnabled(cursor)) return cursor;
+      for (let delta = 1; delta < 7; delta += 1) {
+        const earlier = addDays(cursor, -delta);
+        if (earlier.getMonth() === cursor.getMonth() && heatEnabled(earlier)) return earlier;
+        const later = addDays(cursor, delta);
+        if (later.getMonth() === cursor.getMonth() && heatEnabled(later)) return later;
+      }
+    }
+    return null;
+  }
+
+  function handleHeatKey(event: KeyboardEvent<HTMLButtonElement>, day: Date) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      openDay(day);
+      return;
+    }
+    const target = stepHeatDay(day, event.key);
+    if (!target) return;
+    event.preventDefault();
+    const key = toDateKey(target);
+    setHeatKey(key);
+    event.currentTarget
+      .closest('.heatmap-month-wall')
+      ?.querySelector<HTMLButtonElement>(`[data-heat-key="${key}"]`)
+      ?.focus();
+  }
 
   return createPortal(
-    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => event.currentTarget === event.target && onClose()}>
+    <div className="dialog-backdrop" role="presentation" {...dismissBackdrop}>
       <section
         ref={dialogRef}
         className="habit-dialog habit-detail"
         role="dialog"
         aria-modal="true"
         aria-labelledby="habit-detail-title"
-        style={{ ...habitStyle(habit), '--heat-color': habit.color } as HeatStyle}
+        style={{ ...habitStyle(habit), '--heat-color': themeHabitColor(habit.color) } as HeatStyle}
       >
         <header>
           <div className="habit-detail-identity">
@@ -154,24 +214,36 @@ export function HabitDetail({ habit, state, onClose, onEdit, openDay }: HabitDet
 
           <div className="detail-heatmap">
             <h3>Past year</h3>
-            <div className="heatmap-month-wall">
+            <div className="heatmap-month-wall" role="grid" aria-label={`${habit.name} past year`}>
               {monthRows.map((row) => (
-                <div className="heatmap-month-row" key={row.key}>
-                  <span className="heatmap-month-label">{row.label}</span>
+                <div className="heatmap-month-row" role="row" key={row.key}>
+                  <span className="heatmap-month-label" role="rowheader">{row.label}</span>
                   {row.days.map((day, index) => {
                     if (!day) return <i className="heat-void" key={index} aria-hidden="true" />;
                     const future = isAfterDate(day, today);
-                    const scheduled = isHabitScheduledOn(habit, day);
-                    const ratio = future || !scheduled ? 0 : getDayContributionRatio(habit, day, state) ?? 0;
-                    const level = getIntensityLevel(ratio);
-                    const label = `${formatCompactDate(day)}: ${Math.round(ratio * 100)} percent`;
+                    const mark = future
+                      ? { ratio: 0, off: false, skipped: false }
+                      : describeHabitHeatCell(habit, day, state);
+                    const level = mark.ratio == null ? 0 : getIntensityLevel(mark.ratio);
+                    const key = toDateKey(day);
+                    const label = future
+                      ? `${formatCompactDate(day)}, future day`
+                      : mark.off
+                        ? `${formatCompactDate(day)}, off schedule`
+                        : mark.skipped
+                          ? `${formatCompactDate(day)}, skipped`
+                          : `${formatCompactDate(day)}: ${Math.round((mark.ratio ?? 0) * 100)} percent`;
                     return (
                       <button
                         type="button"
-                        className={`heat-cell level-${level}${future ? ' is-future' : ''}`}
-                        key={toDateKey(day)}
+                        role="gridcell"
+                        className={`heat-cell level-${level}${future ? ' is-future' : ''}${mark.off ? ' is-off' : ''}${mark.skipped ? ' is-skipped has-skip' : ''}`}
+                        data-heat-key={key}
+                        key={key}
                         onClick={() => openDay(day)}
-                        disabled={future}
+                        onKeyDown={(event) => handleHeatKey(event, day)}
+                        disabled={future || mark.off}
+                        tabIndex={key === activeHeatKey ? 0 : -1}
                         aria-label={label}
                         title={label}
                       />

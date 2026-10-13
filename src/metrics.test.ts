@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addDays, fromDateKey, toDateKey } from './dates';
 import {
+  describeHabitHeatCell,
   getDayContributionRatio,
   getDaySnapshot,
+  getHabitDayAttention,
   getHabitPeriodProgress,
   getHabitStats,
   getHabitStrength,
   isHabitActiveOn,
+  isHabitHandledOn,
   isHabitScheduledOn,
   nextMilestone,
   reachedMilestone,
@@ -163,6 +166,54 @@ describe('goal progress', () => {
     expect(getDaySnapshot(state, fromDateKey('2026-07-06')).skipped).toBe(1);
   });
 
+  it('finishes a monthly check goal of 31 in a 28-day month', () => {
+    const testHabit = habit({
+      metric: 'check',
+      target: 31,
+      unit: 'times',
+      period: 'month',
+      increment: 1,
+      startDate: '2026-02-01',
+    });
+    const entries: TrackerState['entries'] = {};
+    for (let day = 1; day <= 27; day += 1) {
+      entries[`2026-02-${String(day).padStart(2, '0')}`] = { [testHabit.id]: entry(1) };
+    }
+    const short = getHabitPeriodProgress(testHabit, fromDateKey('2026-02-15'), tracker(testHabit, entries));
+    expect(short.target).toBe(28);
+    expect(short.complete).toBe(false);
+
+    entries['2026-02-28'] = { [testHabit.id]: entry(1) };
+    const done = getHabitPeriodProgress(testHabit, fromDateKey('2026-02-20'), tracker(testHabit, entries));
+    expect(done.value).toBe(28);
+    expect(done.ratio).toBe(1);
+    expect(done.complete).toBe(true);
+
+    const july = habit({
+      metric: 'check',
+      target: 31,
+      unit: 'times',
+      period: 'month',
+      increment: 1,
+      startDate: '2026-07-01',
+    });
+    const julyProgress = getHabitPeriodProgress(july, fromDateKey('2026-07-15'), tracker(july, {
+      '2026-07-01': { [july.id]: entry(1) },
+    }));
+    expect(julyProgress.target).toBe(31);
+    expect(julyProgress.complete).toBe(false);
+
+    const late = habit({
+      metric: 'check',
+      target: 31,
+      unit: 'times',
+      period: 'month',
+      increment: 1,
+      startDate: '2026-02-15',
+    });
+    expect(getHabitPeriodProgress(late, fromDateKey('2026-02-20'), tracker(late)).target).toBe(14);
+  });
+
   it('does not let one day-level skip waive a flexible weekly goal', () => {
     const testHabit = habit({ metric: 'check', target: 2, unit: 'sessions', period: 'week', increment: 1 });
     const state = tracker(testHabit, {
@@ -171,6 +222,92 @@ describe('goal progress', () => {
     const progress = getHabitPeriodProgress(testHabit, fromDateKey('2026-07-08'), state);
     expect(progress.skipped).toBe(false);
     expect(progress.complete).toBe(false);
+  });
+});
+
+describe('what is left today', () => {
+  it('keeps the day ring and the remaining count on the same question', () => {
+    const daily = habit({ id: 'daily', target: 10 });
+    const flexible = habit({ id: 'flexible', target: 4, period: 'week', metric: 'check', unit: 'sessions', increment: 1 });
+    const state: TrackerState = {
+      ...tracker(daily),
+      habits: [daily, flexible],
+      entries: { '2026-07-06': { daily: entry(10) } },
+    };
+    const day = fromDateKey('2026-07-06');
+    expect(getDaySnapshot(state, day).score).toBe(1);
+    expect(getHabitDayAttention(flexible, day, state)).toBe('optional');
+    expect(isHabitHandledOn(daily, day, state)).toBe(true);
+    expect(isHabitHandledOn(flexible, day, state)).toBe(true);
+  });
+
+  it('settles a flexible check for today once it is logged', () => {
+    const flexible = habit({ period: 'week', metric: 'check', target: 3, unit: 'sessions', increment: 1 });
+    const state = tracker(flexible, { '2026-07-08': { [flexible.id]: entry(1) } });
+    const day = fromDateKey('2026-07-08');
+    expect(getHabitPeriodProgress(flexible, day, state).complete).toBe(false);
+    expect(getHabitDayAttention(flexible, day, state)).toBe('satisfied');
+    expect(isHabitHandledOn(flexible, day, state)).toBe(true);
+    expect(getDaySnapshot(state, day).score).toBe(1);
+    expect(getHabitDayAttention(flexible, fromDateKey('2026-07-09'), state)).toBe('optional');
+  });
+
+  it('settles today once a flexible count has a full step logged', () => {
+    const flexible = habit({ period: 'week', target: 30, unit: 'min', increment: 10 });
+    const partial = tracker(flexible, { '2026-07-08': { [flexible.id]: entry(5) } });
+    const day = fromDateKey('2026-07-08');
+    expect(getDayContributionRatio(flexible, day, partial)).toBe(0.5);
+    expect(getHabitDayAttention(flexible, day, partial)).toBe('open');
+    expect(isHabitHandledOn(flexible, day, partial)).toBe(false);
+
+    const stepped = tracker(flexible, { '2026-07-08': { [flexible.id]: entry(10) } });
+    expect(getHabitPeriodProgress(flexible, day, stepped).complete).toBe(false);
+    expect(getHabitDayAttention(flexible, day, stepped)).toBe('satisfied');
+    expect(isHabitHandledOn(flexible, day, stepped)).toBe(true);
+    expect(getDaySnapshot(stepped, day).score).toBe(1);
+  });
+
+  it('settles an open stay-under period for today without awarding the streak yet', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-08'));
+    const testHabit = habit({ metric: 'duration', target: 60, unit: 'min', period: 'week', direction: 'atMost' });
+    const within = tracker(testHabit, { '2026-07-06': { [testHabit.id]: entry(40) } });
+    const day = fromDateKey('2026-07-08');
+    expect(getHabitPeriodProgress(testHabit, day, within).complete).toBe(false);
+    expect(getHabitDayAttention(testHabit, day, within)).toBe('satisfied');
+    expect(isHabitHandledOn(testHabit, day, within)).toBe(true);
+
+    const withinSnapshot = getDaySnapshot(within, day);
+    expect(withinSnapshot.scheduled).toBe(0);
+
+    const over = tracker(testHabit, {
+      '2026-07-06': { [testHabit.id]: entry(40) },
+      '2026-07-07': { [testHabit.id]: entry(40) },
+    });
+    expect(getHabitDayAttention(testHabit, day, over)).toBe('open');
+    const overSnapshot = getDaySnapshot(over, day);
+    expect(overSnapshot.scheduled).toBe(1);
+    expect(overSnapshot.score).toBeCloseTo(60 / 80);
+  });
+
+  it('paints rest days and skips as neither misses nor completions', () => {
+    const weekday = habit({ schedule: { type: 'selectedDays', days: [1, 2, 3, 4, 5] } });
+    expect(describeHabitHeatCell(weekday, fromDateKey('2026-07-11'), tracker(weekday))).toEqual({
+      ratio: null,
+      off: true,
+      skipped: false,
+    });
+
+    const daily = habit();
+    const skipped = tracker(daily, { '2026-07-06': { [daily.id]: entry(0, { skipped: true }) } });
+    expect(describeHabitHeatCell(daily, fromDateKey('2026-07-06'), skipped)).toEqual({
+      ratio: null,
+      off: false,
+      skipped: true,
+    });
+
+    const missed = tracker(daily);
+    expect(describeHabitHeatCell(daily, fromDateKey('2026-07-06'), missed).ratio).toBe(0);
   });
 });
 

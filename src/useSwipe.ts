@@ -21,7 +21,8 @@ export function useSwipeNavigation(onPrevious: () => void, onNext?: () => void) 
     const start = origin.current;
     origin.current = null;
     if (!start) return;
-    if ((event.target as HTMLElement).closest('input, textarea, select')) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, .heatmap-scroll, .heatmap-month-wall, .week-matrix-scroll')) return;
     const touch = event.changedTouches[0];
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
