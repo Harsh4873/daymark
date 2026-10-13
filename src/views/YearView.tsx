@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import {
   addDays,
   addYears,
+  advanceRollingYear,
   formatCompactDate,
   formatDateRange,
   fromDateKey,
@@ -19,6 +20,7 @@ import {
   getEntry,
   getHabitStats,
   getIntensityLevel,
+  hasVisibleEntry,
   isHabitActiveOn,
 } from '../metrics';
 import type { Habit, TrackerState } from '../model';
@@ -58,10 +60,13 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
   const heatColor = themeHabitColor(filteredHabits[0]?.color ?? '#b8f35b');
   const todayKey = toDateKey(new Date());
   const today = fromDateKey(todayKey);
-  const currentWindow = date.getFullYear() === today.getFullYear();
+  const nextAnchor = advanceRollingYear(date, today, state.profile.weekStartsOn);
   const swipe = useSwipeNavigation(
     () => setDate(addYears(date, -1)),
-    currentWindow ? undefined : () => setDate(addYears(date, 1)),
+    nextAnchor ? () => {
+      const next = advanceRollingYear(date, new Date(), state.profile.weekStartsOn);
+      if (next) setDate(next);
+    } : undefined,
   );
 
   useEffect(() => {
@@ -125,7 +130,7 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
   const habitStats = filteredHabits.map((habit) => ({ habit, stats: getHabitStats(habit, state, date) }));
   const strongest = [...habitStats].sort((left, right) => right.stats.consistency - left.stats.consistency)[0];
   const longestStreak = habitStats.reduce((best, item) => Math.max(best, item.stats.bestStreak), 0);
-  const selectedHabits = filteredHabits.filter((habit) => getEntry(state, habit.id, selectedDate));
+  const selectedHabits = filteredHabits.filter((habit) => hasVisibleEntry(getEntry(state, habit.id, selectedDate)));
   const selectedSnapshot = getDaySnapshot(state, selectedDate, filteredHabits);
   const weekLabels = state.profile.weekStartsOn === 1
     ? ['Mon', '', 'Wed', '', 'Fri', '', 'Sun']
@@ -210,8 +215,11 @@ export function YearView({ state, habits, date, setDate, openDay, openHabitDetai
         </label>
         <div className="year-nav">
           <button type="button" onClick={() => setDate(addYears(date, -1))} aria-label="Previous twelve-month window"><ChevronLeft aria-hidden="true" /></button>
-          <button type="button" onClick={() => setDate(new Date())} disabled={currentWindow}>Current</button>
-          <button type="button" onClick={() => setDate(addYears(date, 1))} disabled={currentWindow} aria-label="Next twelve-month window"><ChevronRight aria-hidden="true" /></button>
+          <button type="button" onClick={() => setDate(new Date())} disabled={nextAnchor === null}>Current</button>
+          <button type="button" onClick={() => {
+            const next = advanceRollingYear(date, new Date(), state.profile.weekStartsOn);
+            if (next) setDate(next);
+          }} disabled={nextAnchor === null} aria-label="Next twelve-month window"><ChevronRight aria-hidden="true" /></button>
         </div>
       </div>
 

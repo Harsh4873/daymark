@@ -118,6 +118,18 @@ export function clampToToday(date: Date) {
   return isAfterDate(date, today) ? today : date;
 }
 
+/**
+ * The next rolling-year anchor, or null when this window already reaches today.
+ * A full year that would land past the live week stops on today instead.
+ */
+export function advanceRollingYear(anchor: Date, today: Date, weekStartsOn: 0 | 1) {
+  const liveEnd = toDateKey(endOfWeek(today, weekStartsOn));
+  if (toDateKey(endOfWeek(anchor, weekStartsOn)) >= liveEnd) return null;
+  const candidate = addYears(anchor, 1);
+  if (toDateKey(endOfWeek(candidate, weekStartsOn)) > liveEnd) return startOfDay(today);
+  return candidate;
+}
+
 export function formatFullDate(date: Date) {
   return new Intl.DateTimeFormat('en-US', {
     weekday: 'long',

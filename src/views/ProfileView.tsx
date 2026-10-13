@@ -22,7 +22,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toDateKey } from '../dates';
 import { habitIconMap, HabitGlyph } from '../icons';
@@ -211,6 +211,10 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
       setError('Choose at least one scheduled day.');
       return;
     }
+    if (habit.schedule.type === 'interval' && (!Number.isInteger(habit.schedule.every) || habit.schedule.every < 1)) {
+      setError('The repeat interval must be a whole number of days or weeks.');
+      return;
+    }
     onSave({ ...habit, name: habit.name.trim(), category: habit.category.trim() || 'Uncategorized', unit: habit.unit.trim() || 'units' });
   }
 
@@ -255,7 +259,7 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
             </div>
             <div className="color-picker" role="group" aria-label="Habit color">
               {HABIT_COLORS.map((color) => (
-                <button type="button" className={habit.color === color ? 'selected' : ''} style={{ background: themeHabitColor(color) }} onClick={() => update({ color })} key={color} aria-label={`Use color ${color}`} aria-pressed={habit.color === color} />
+                <button type="button" className={habit.color === color ? 'selected' : ''} style={{ background: themeHabitColor(color) }} onClick={() => update({ color })} key={color} aria-label={`Use ${COLOR_NAMES[color] ?? color}`} aria-pressed={habit.color === color} />
               ))}
             </div>
           </fieldset>
@@ -341,7 +345,7 @@ export function HabitEditor({ initial, measurementLocked, onClose, onSave }: {
             {habit.period === 'day' && habit.schedule.type === 'interval' && (
               <div className="interval-fields">
                 <span>Repeat every</span>
-                <input type="number" min="1" max="365" value={habit.schedule.every} onChange={(event) => update({ schedule: { type: 'interval', every: Math.max(1, Number(event.target.value)), unit: habit.schedule.type === 'interval' ? habit.schedule.unit : 'day' } })} disabled={measurementLocked} />
+                <input type="number" min="1" max="365" step="1" value={habit.schedule.every} onChange={(event) => update({ schedule: { type: 'interval', every: Math.max(1, Number(event.target.value)), unit: habit.schedule.type === 'interval' ? habit.schedule.unit : 'day' } })} disabled={measurementLocked} />
                 <select value={habit.schedule.unit} onChange={(event) => update({ schedule: { type: 'interval', every: habit.schedule.type === 'interval' ? habit.schedule.every : 1, unit: event.target.value as 'day' | 'week' } })} disabled={measurementLocked}>
                   <option value="day">day(s)</option>
                   <option value="week">week(s)</option>
@@ -386,8 +390,10 @@ function downloadText(filename: string, text: string, type: string) {
   }, 4000);
 }
 
-function csvCell(value: string | number | undefined) {
-  const text = String(value ?? '');
+export function csvCell(value: string | number | undefined) {
+  let text = String(value ?? '');
+  // A leading formula character becomes a spreadsheet formula unless it is neutralized.
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
 }
 
@@ -441,6 +447,58 @@ function formatSyncTime(value?: string) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+const COLOR_NAMES: Record<string, string> = {
+  '#b8f35b': 'lime',
+  '#8d7cff': 'violet',
+  '#ff8e64': 'coral',
+  '#58c9d6': 'teal',
+  '#f4c95d': 'gold',
+  '#f47ea8': 'pink',
+  '#69d69c': 'mint',
+  '#73a7ff': 'blue',
+};
+
+function ProfileNameField({ name, onCommit }: { name: string; onCommit: (name: string) => void }) {
+  const [draft, setDraft] = useState(name);
+  const draftRef = useRef(draft);
+  const committedRef = useRef(name);
+  const onCommitRef = useRef(onCommit);
+  draftRef.current = draft;
+  onCommitRef.current = onCommit;
+
+  useEffect(() => {
+    if (name === committedRef.current) return;
+    committedRef.current = name;
+    setDraft(name);
+  }, [name]);
+
+  function commit(next = draftRef.current) {
+    if (next === committedRef.current) return;
+    committedRef.current = next;
+    onCommitRef.current(next);
+  }
+
+  useEffect(() => () => {
+    if (draftRef.current === committedRef.current) return;
+    committedRef.current = draftRef.current;
+    onCommitRef.current(draftRef.current);
+  }, []);
+
+  return (
+    <label className="field">
+      <span>Name</span>
+      <input
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => commit()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+        }}
+      />
+    </label>
+  );
 }
 
 export function ProfileView({
@@ -642,7 +700,7 @@ export function ProfileView({
       <section className="panel settings-panel">
         <div className="panel-heading compact"><div><span>Preferences</span><h2>Settings</h2></div></div>
         <div className="settings-grid">
-          <label className="field"><span>Name</span><input value={state.profile.displayName} onChange={(event) => updateProfile({ displayName: event.target.value })} /></label>
+          <ProfileNameField name={state.profile.displayName} onCommit={(displayName) => updateProfile({ displayName })} />
           <label className="field"><span>Week starts</span><select value={state.profile.weekStartsOn} onChange={(event) => updateProfile({ weekStartsOn: Number(event.target.value) as 0 | 1 })}><option value={1}>Monday</option><option value={0}>Sunday</option></select></label>
           <label className="field"><span>Appearance</span><select value={state.profile.theme} onChange={(event) => updateProfile({ theme: event.target.value as TrackerState['profile']['theme'] })}><option value="dark">Dark</option><option value="light">Light</option><option value="system">Follow device</option></select></label>
         </div>
@@ -717,7 +775,7 @@ export function ProfileView({
           <button type="button" className="button button-secondary" onClick={exportCsv}><Download aria-hidden="true" /> CSV</button>
           <button type="button" className="button button-secondary" onClick={() => importInput.current?.click()}><Upload aria-hidden="true" /> Import</button>
           <button type="button" className="button button-danger" onClick={resetAll}><RotateCcw aria-hidden="true" /> Reset</button>
-          <input ref={importInput} className="sr-only" type="file" accept="application/json,.json" aria-label="Choose a Daymark JSON backup" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0])} />
+          <input ref={importInput} className="sr-only" tabIndex={-1} type="file" accept="application/json,.json" aria-label="Choose a Daymark JSON backup" onChange={(event) => event.target.files?.[0] && void importBackup(event.target.files[0])} />
         </div>
         {dataMessage && <p className="data-message" role="status">{dataMessage}</p>}
       </section>

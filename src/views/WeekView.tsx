@@ -1,9 +1,8 @@
 import { addDays, formatDateRange, getWeekDays, isAfterDate, isSameDate, startOfWeek, toDateKey } from '../dates';
 import {
+  describeWeekDayCell,
   formatValue,
-  getDayContributionRatio,
   getDaySnapshot,
-  getEntry,
   getHabitPeriodProgress,
   getIntensityLevel,
   isHabitActiveOn,
@@ -62,13 +61,13 @@ function weekResult(habit: Habit, days: Date[], state: TrackerState) {
   };
 }
 
-function averageWeekScore(state: TrackerState, habits: Habit[], days: Date[]) {
+function scoredWeekAverage(state: TrackerState, habits: Habit[], days: Date[]) {
   const today = new Date();
   const elapsed = days
     .filter((day) => !isAfterDate(day, today))
     .map((day) => getDaySnapshot(state, day, habits))
     .filter((snapshot) => snapshot.scheduled > 0);
-  if (!elapsed.length) return 0;
+  if (!elapsed.length) return null;
   return elapsed.reduce((sum, snapshot) => sum + snapshot.score, 0) / elapsed.length;
 }
 
@@ -76,9 +75,9 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
   const weekDays = getWeekDays(date, state.profile.weekStartsOn);
   const visibleHabits = habits.filter((habit) => weekDays.some((day) => isHabitActiveOn(habit, day)));
   const previousDays = weekDays.map((day) => addDays(day, -7));
-  const score = averageWeekScore(state, visibleHabits, weekDays);
-  const previousScore = averageWeekScore(state, visibleHabits, previousDays);
-  const change = score - previousScore;
+  const score = scoredWeekAverage(state, visibleHabits, weekDays) ?? 0;
+  const previousScore = scoredWeekAverage(state, visibleHabits, previousDays);
+  const change = previousScore === null ? null : score - previousScore;
   const daySnapshots = weekDays.map((day) => ({ day, snapshot: getDaySnapshot(state, day, visibleHabits) }));
   const elapsedSnapshots = daySnapshots.filter(({ day }) => !isAfterDate(day, new Date()));
   const activeDays = elapsedSnapshots.filter(({ snapshot }) => snapshot.logged > 0).length;
@@ -124,8 +123,8 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
         <div className="recap-item recap-accent">
           <span>Week score</span>
           <strong>{Math.round(score * 100)}%</strong>
-          <small className={change >= 0 ? 'delta-up' : 'delta-down'}>
-            {change >= 0 ? '+' : ''}{Math.round(change * 100)} vs last week
+          <small className={change === null ? undefined : change < 0 ? 'delta-down' : 'delta-up'}>
+            {change === null ? 'No prior week' : `${change >= 0 ? '+' : ''}${Math.round(change * 100)} vs last week`}
           </small>
         </div>
         <div className="recap-item">
@@ -156,6 +155,9 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
           </div>
         </div>
 
+        {visibleHabits.length === 0 ? (
+          <p className="no-day-entries">No habits in this week.</p>
+        ) : (
         <div className="week-matrix-scroll">
           <div className="week-matrix" style={{ '--day-count': weekDays.length } as React.CSSProperties}>
             <div className="week-matrix-corner">Habit</div>
@@ -186,27 +188,21 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
                     <span><strong>{habit.name}</strong><small>{habit.category}</small></span>
                   </button>
                   {weekDays.map((day) => {
-                    const ratio = getDayContributionRatio(habit, day, state);
-                    const entry = getEntry(state, habit.id, day);
+                    const mark = describeWeekDayCell(habit, day, state);
                     const future = isAfterDate(day, new Date());
-                    const off = ratio === null && !entry?.skipped;
-                    const level = getIntensityLevel(ratio ?? 0);
-                    const label = off
-                      ? `${habit.name} is off schedule on ${day.toLocaleDateString()}`
-                      : entry?.skipped
-                        ? `${habit.name} was skipped on ${day.toLocaleDateString()}`
-                        : `${habit.name}, ${Math.round((ratio ?? 0) * 100)} percent on ${day.toLocaleDateString()}`;
+                    const off = mark.ratio === null && !mark.skipped;
+                    const level = getIntensityLevel(mark.ratio ?? 0);
                     return (
                       <button
                         type="button"
-                        className={`matrix-cell level-${level}${off ? ' is-off' : ''}${entry?.skipped ? ' is-skipped' : ''}`}
+                        className={`matrix-cell level-${level}${off ? ' is-off' : ''}${mark.skipped ? ' is-skipped' : ''}`}
                         key={day.toISOString()}
                         onClick={() => openDay(day)}
                         disabled={future}
-                        aria-label={label}
-                        title={label}
+                        aria-label={mark.label}
+                        title={mark.label}
                       >
-                        <span aria-hidden="true">{entry?.skipped ? '–' : ratio && ratio >= 1 ? '✓' : ''}</span>
+                        <span aria-hidden="true">{mark.skipped ? '–' : mark.done ? '✓' : ''}</span>
                       </button>
                     );
                   })}
@@ -219,6 +215,7 @@ export function WeekView({ state, habits, date, setDate, openDay, openHabitDetai
             })}
           </div>
         </div>
+        )}
       </section>
 
     </div>

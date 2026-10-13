@@ -206,14 +206,16 @@ export function MetricCard({ label, value, detail, accent = false }: { label: st
 
 export function ProgressBar({ value, color, label, over = false }: { value: number; color?: string; label?: string; over?: boolean }) {
   const safe = Math.max(0, Math.min(1, over ? 1 : value));
+  const caption = label ?? 'Progress';
   return (
     <div
       className={over ? 'linear-progress is-over' : 'linear-progress'}
       role="progressbar"
-      aria-label={label ?? 'Progress'}
+      aria-label={caption}
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={Math.round(safe * 100)}
+      aria-valuenow={over ? undefined : Math.round(safe * 100)}
+      aria-valuetext={over ? `${caption}, over the limit` : undefined}
     >
       <span style={{ width: `${safe * 100}%`, background: over ? 'var(--danger)' : color ? themeHabitColor(color) : undefined }} />
     </div>

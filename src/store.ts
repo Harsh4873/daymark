@@ -45,6 +45,53 @@ export type TrackerMutation =
 
 export type TrackerMutationListener = (mutation: TrackerMutation) => void;
 
+/**
+ * Checking stores 1. Undoing stores a non-log (`hasValue: false`) rather than a
+ * logged zero, and keeps a note. The entry stays so a sync updates the cloud
+ * copy instead of leaving the old check-in in place.
+ */
+export function applyCheckToggle(entry: HabitEntry | undefined, updatedAt: string): HabitEntry {
+  const checked = Boolean(entry && !entry.skipped && entry.hasValue !== false && entry.value > 0);
+  if (checked) {
+    return {
+      value: 0,
+      hasValue: false,
+      note: entry?.note,
+      updatedAt,
+    };
+  }
+  return {
+    value: 1,
+    hasValue: true,
+    note: entry?.note,
+    updatedAt,
+  };
+}
+
+/** A finished non-negative amount. Empty and partial drafts such as "7." are not ready to store. */
+export function parseDraftAmount(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^(?:\d+\.?\d*|\.\d+)$/.test(trimmed) || trimmed.endsWith('.')) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The amount to store for a draft, or null when it is unfinished or already
+ * the shown value. `finalize` accepts a trailing dot once editing is done.
+ * Passing the logged value (including a skipped day) keeps a focus-blur from
+ * writing a placeholder zero or clearing the skip.
+ */
+export function commitDraftAmount(raw: string, baseline: string, stored: number | null, finalize = false): number | null {
+  const trimmed = raw.trim();
+  const finished = finalize && trimmed.endsWith('.') ? trimmed.slice(0, -1) : trimmed;
+  if (finished === baseline.trim()) return null;
+  const parsed = parseDraftAmount(finished);
+  if (parsed === null) return null;
+  if (stored !== null && parsed === stored) return null;
+  return parsed;
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -521,21 +568,21 @@ export function useTrackerStore(): TrackerStore {
   }, [updateEntry]);
 
   const incrementEntry = useCallback((habitId: string, dateKey: string, amount: number) => {
-    updateEntry(habitId, dateKey, (entry) => ({
-      value: Math.max(0, (entry?.skipped ? 0 : entry?.value ?? 0) + amount),
-      hasValue: true,
-      note: entry?.note,
-      updatedAt: new Date().toISOString(),
-    }));
+    updateEntry(habitId, dateKey, (entry) => {
+      // A skip hides the day from totals but must not throw away the stored amount.
+      const base = entry && entry.hasValue !== false ? entry.value : 0;
+      return {
+        value: Math.max(0, base + amount),
+        hasValue: true,
+        note: entry?.note,
+        updatedAt: new Date().toISOString(),
+      };
+    });
   }, [updateEntry]);
 
   const toggleCheck = useCallback((habitId: string, dateKey: string) => {
-    updateEntry(habitId, dateKey, (entry) => ({
-      value: entry && !entry.skipped && entry.value > 0 ? 0 : 1,
-      hasValue: true,
-      note: entry?.note,
-      updatedAt: new Date().toISOString(),
-    }));
+    const updatedAt = new Date().toISOString();
+    updateEntry(habitId, dateKey, (entry) => applyCheckToggle(entry, updatedAt));
   }, [updateEntry]);
 
   const toggleSkip = useCallback((habitId: string, dateKey: string) => {

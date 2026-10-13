@@ -24,7 +24,7 @@ import {
   type HabitDayAttention,
 } from '../metrics';
 import type { Habit, TimeSlot, TrackerState } from '../model';
-import type { TrackerStore } from '../store';
+import { commitDraftAmount, type TrackerStore } from '../store';
 import { useSwipeNavigation } from '../useSwipe';
 import {
   DateSwitcher,
@@ -97,13 +97,15 @@ function HabitRow({
 } & EntryActions) {
   const [expanded, setExpanded] = useState(false);
   const [popped, setPopped] = useState(false);
+  const [amountDraft, setAmountDraft] = useState<string | null>(null);
+  const amountBaseline = useRef('0');
   const rowRef = useRef<HTMLElement>(null);
   const releaseRef = useRef(onRelease);
   releaseRef.current = onRelease;
   const dateKey = toDateKey(date);
   const entry = getEntry(state, habit.id, date);
   const progress = getHabitPeriodProgress(habit, date, state);
-  const dayChecked = Boolean(entry && !entry.skipped && entry.value > 0);
+  const dayChecked = Boolean(entry && !entry.skipped && entry.hasValue !== false && entry.value > 0);
   const displayValue = habit.period === 'day' ? entry?.value ?? 0 : progress.value;
   const milestone = reachedMilestone(streak);
   const overCap = habit.direction === 'atMost' && progress.hasEntry && progress.value > progress.target;
@@ -120,15 +122,17 @@ function HabitRow({
   }, [settled]);
 
   useEffect(() => {
-    function onDocumentPointerUp(event: PointerEvent) {
-      const row = rowRef.current;
-      const target = event.target;
-      if (!row || !(target instanceof Node) || row.contains(target)) return;
-      // After the click, so a tap on another row is not lost to a layout shift.
+    function onDocumentPointerUp() {
+      // Release after the click, including when the gesture ends on this row.
+      // The pin only has to hold the section steady between pointerdown and click.
       window.setTimeout(() => releaseRef.current(habit.id), 0);
     }
     document.addEventListener('pointerup', onDocumentPointerUp);
-    return () => document.removeEventListener('pointerup', onDocumentPointerUp);
+    document.addEventListener('pointercancel', onDocumentPointerUp);
+    return () => {
+      document.removeEventListener('pointerup', onDocumentPointerUp);
+      document.removeEventListener('pointercancel', onDocumentPointerUp);
+    };
   }, [habit.id]);
 
   const statusLine = entry?.skipped
@@ -148,11 +152,13 @@ function HabitRow({
   function quickCheck() {
     if (!dayChecked) buzz();
     toggleCheck(habit.id, dateKey);
+    onRelease(habit.id);
   }
 
   function quickAdd() {
     if (!settled) buzz();
     incrementEntry(habit.id, dateKey, habit.increment);
+    onRelease(habit.id);
   }
 
   return (
@@ -234,21 +240,43 @@ function HabitRow({
           <span className="habit-row-status">{statusLine}</span>
           {habit.metric !== 'check' && (
             <div className="value-stepper" aria-label={`Log ${habit.name}`}>
-              <button type="button" onClick={() => incrementEntry(habit.id, dateKey, -habit.increment)} aria-label={`Subtract ${habit.increment} ${habit.unit}`}>
+              <button type="button" onClick={() => { incrementEntry(habit.id, dateKey, -habit.increment); onRelease(habit.id); }} aria-label={`Subtract ${habit.increment} ${habit.unit}`}>
                 <Minus aria-hidden="true" />
               </button>
               <label>
                 <span className="sr-only">{habit.name} value in {habit.unit}</span>
                 <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={entry?.skipped ? 0 : entry?.value ?? 0}
-                  onChange={(event) => setEntryValue(habit.id, dateKey, Number(event.target.value))}
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={amountDraft ?? String(entry?.value ?? 0)}
+                  onFocus={() => {
+                    const next = String(entry?.value ?? 0);
+                    amountBaseline.current = next;
+                    setAmountDraft(next);
+                  }}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    if (raw !== '' && !/^\s*\d*\.?\d*\s*$/.test(raw)) return;
+                    setAmountDraft(raw);
+                    const stored = entry && entry.hasValue !== false ? entry.value : null;
+                    const parsed = commitDraftAmount(raw, amountBaseline.current, stored);
+                    if (parsed === null) return;
+                    setEntryValue(habit.id, dateKey, parsed);
+                  }}
+                  onBlur={() => {
+                    const raw = amountDraft;
+                    setAmountDraft(null);
+                    if (raw === null) return;
+                    const stored = entry && entry.hasValue !== false ? entry.value : null;
+                    const parsed = commitDraftAmount(raw, amountBaseline.current, stored, true);
+                    if (parsed === null) return;
+                    setEntryValue(habit.id, dateKey, parsed);
+                  }}
                 />
                 <small>{habit.unit}</small>
               </label>
-              <button type="button" onClick={() => incrementEntry(habit.id, dateKey, habit.increment)} aria-label={`Add ${habit.increment} ${habit.unit}`}>
+              <button type="button" onClick={() => { incrementEntry(habit.id, dateKey, habit.increment); onRelease(habit.id); }} aria-label={`Add ${habit.increment} ${habit.unit}`}>
                 <Plus aria-hidden="true" />
               </button>
             </div>
@@ -263,7 +291,7 @@ function HabitRow({
             />
           </label>
           <div className="habit-row-detail-actions">
-            <button type="button" className="quiet-action" onClick={() => toggleSkip(habit.id, dateKey)}>
+            <button type="button" className="quiet-action" onClick={() => { toggleSkip(habit.id, dateKey); onRelease(habit.id); }}>
               <SkipForward aria-hidden="true" />
               <span>{entry?.skipped ? 'Unskip' : 'Skip today'}</span>
             </button>

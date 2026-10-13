@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addDays, fromDateKey, toDateKey } from './dates';
+import { addDays, advanceRollingYear, fromDateKey, toDateKey } from './dates';
 import {
   describeHabitHeatCell,
+  describeWeekDayCell,
   getDayContributionRatio,
   getDaySnapshot,
+  getEntry,
   getHabitDayAttention,
   getHabitPeriodProgress,
   getHabitStats,
   getHabitStrength,
+  hasLoggedValue,
   isHabitActiveOn,
   isHabitHandledOn,
   isHabitScheduledOn,
@@ -15,7 +18,8 @@ import {
   reachedMilestone,
 } from './metrics';
 import type { Habit, HabitEntry, TrackerState } from './model';
-import { parseTrackerState } from './store';
+import { applyCheckToggle, commitDraftAmount, parseDraftAmount, parseTrackerState } from './store';
+import { csvCell } from './views/ProfileView';
 
 const timestamp = '2026-07-01T12:00:00.000Z';
 
@@ -212,6 +216,25 @@ describe('goal progress', () => {
       startDate: '2026-02-15',
     });
     expect(getHabitPeriodProgress(late, fromDateKey('2026-02-20'), tracker(late)).target).toBe(14);
+  });
+
+  it('keeps a logged amount when skipping a day inside a flexible week', () => {
+    const testHabit = habit({ target: 30, period: 'week', increment: 10 });
+    const state = tracker(testHabit, {
+      '2026-07-06': { [testHabit.id]: entry(30, { skipped: true }) },
+    });
+    const progress = getHabitPeriodProgress(testHabit, fromDateKey('2026-07-08'), state);
+    expect(progress.skipped).toBe(false);
+    expect(progress.value).toBe(30);
+    expect(progress.complete).toBe(true);
+
+    const daily = habit({ target: 10 });
+    const skippedDay = tracker(daily, {
+      '2026-07-06': { [daily.id]: entry(10, { skipped: true }) },
+    });
+    const dailyProgress = getHabitPeriodProgress(daily, fromDateKey('2026-07-06'), skippedDay);
+    expect(dailyProgress.value).toBe(0);
+    expect(dailyProgress.skipped).toBe(true);
   });
 
   it('does not let one day-level skip waive a flexible weekly goal', () => {
@@ -456,6 +479,25 @@ describe('pause history and imports', () => {
     expect(isHabitActiveOn(testHabit, fromDateKey('2026-07-08'))).toBe(true);
   });
 
+  it('does not paint an untouched stay-under day as done', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fromDateKey('2026-07-08'));
+    const testHabit = habit({ metric: 'duration', target: 60, unit: 'min', period: 'week', direction: 'atMost' });
+    const state = tracker(testHabit, {
+      '2026-07-06': { [testHabit.id]: entry(40) },
+    });
+    const monday = describeWeekDayCell(testHabit, fromDateKey('2026-07-06'), state);
+    const tuesday = describeWeekDayCell(testHabit, fromDateKey('2026-07-07'), state);
+    expect(getDayContributionRatio(testHabit, fromDateKey('2026-07-06'), state)).toBe(1);
+    expect(getDayContributionRatio(testHabit, fromDateKey('2026-07-07'), state)).toBe(0);
+    expect(monday.done).toBe(false);
+    expect(monday.label).toContain('within the week limit');
+    expect(monday.label).not.toContain('100 percent');
+    expect(tuesday.done).toBe(false);
+    expect(tuesday.label).toContain('no entry');
+    expect(describeHabitHeatCell(testHabit, fromDateKey('2026-07-07'), state).ratio).toBe(0);
+  });
+
   it('rejects malformed habit schedules before replacing local data', () => {
     const testHabit = habit();
     const malformed: unknown = {
@@ -463,5 +505,76 @@ describe('pause history and imports', () => {
       habits: [{ ...testHabit, schedule: { type: 'selectedDays', days: [] } }],
     };
     expect(() => parseTrackerState(malformed)).toThrow(/selected days/i);
+  });
+});
+
+describe('undoing a check', () => {
+  it('clears the logged value instead of storing a zero check-in', () => {
+    const cleared = applyCheckToggle({ value: 1, hasValue: true, note: 'kept', updatedAt: timestamp }, timestamp);
+    expect(cleared).toMatchObject({ value: 0, hasValue: false, note: 'kept' });
+    expect(hasLoggedValue(cleared)).toBe(false);
+
+    const checked = applyCheckToggle(cleared, timestamp);
+    expect(checked).toMatchObject({ value: 1, hasValue: true, note: 'kept' });
+    expect(hasLoggedValue(checked)).toBe(true);
+
+    const testHabit = habit({ metric: 'check', target: 1, unit: 'times', increment: 1 });
+    const state = tracker(testHabit, {
+      '2026-07-06': { [testHabit.id]: cleared },
+    });
+    const day = fromDateKey('2026-07-06');
+    expect(hasLoggedValue(getEntry(state, testHabit.id, day))).toBe(false);
+    expect(getDaySnapshot(state, day).logged).toBe(0);
+    expect(getHabitDayAttention(testHabit, day, state)).toBe('open');
+  });
+
+  it('still treats an explicit zero on a measured habit as logged', () => {
+    expect(hasLoggedValue(entry(0, { hasValue: true }))).toBe(true);
+    const testHabit = habit();
+    const state = tracker(testHabit, {
+      '2026-07-06': { [testHabit.id]: entry(0, { hasValue: true }) },
+    });
+    expect(getDaySnapshot(state, fromDateKey('2026-07-06')).logged).toBe(1);
+  });
+});
+
+describe('amount drafts', () => {
+  it('keeps a partial decimal out of the stored value', () => {
+    expect(parseDraftAmount('7.')).toBeNull();
+    expect(parseDraftAmount('')).toBeNull();
+    expect(parseDraftAmount('.')).toBeNull();
+    expect(parseDraftAmount('7.5')).toBe(7.5);
+    expect(parseDraftAmount('.5')).toBe(0.5);
+    expect(parseDraftAmount('0')).toBe(0);
+  });
+
+  it('does not store an unchanged focus blur or a placeholder zero', () => {
+    expect(commitDraftAmount('0', '0', null)).toBeNull();
+    expect(commitDraftAmount('30', '30', 30)).toBeNull();
+    expect(commitDraftAmount('30.', '30', 30, true)).toBeNull();
+    expect(commitDraftAmount('30.0', '30', 30)).toBeNull();
+    expect(commitDraftAmount('', '10', 10, true)).toBeNull();
+    expect(commitDraftAmount('7.', '0', null)).toBeNull();
+    expect(commitDraftAmount('7.', '0', null, true)).toBe(7);
+    expect(commitDraftAmount('7.5', '0', null)).toBe(7.5);
+    expect(commitDraftAmount('0', '5', 5)).toBe(0);
+  });
+});
+
+describe('rolling year step', () => {
+  it('stops on the live week instead of stepping into the future', () => {
+    expect(advanceRollingYear(fromDateKey('2025-12-30'), fromDateKey('2026-01-02'), 1)).toBeNull();
+    expect(toDateKey(advanceRollingYear(fromDateKey('2025-07-01'), fromDateKey('2026-01-02'), 1)!)).toBe('2026-01-02');
+    expect(toDateKey(advanceRollingYear(fromDateKey('2024-01-15'), fromDateKey('2026-03-15'), 1)!)).toBe('2025-01-15');
+  });
+});
+
+describe('csv cells', () => {
+  it('neutralizes formula prefixes', () => {
+    expect(csvCell('=1+1')).toBe(`"'=1+1"`);
+    expect(csvCell('+1')).toBe(`"'+1"`);
+    expect(csvCell('-rest')).toBe(`"'-rest"`);
+    expect(csvCell('@cmd')).toBe(`"'@cmd"`);
+    expect(csvCell('ok "note"')).toBe(`"ok ""note"""`);
   });
 });

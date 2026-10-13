@@ -54,6 +54,13 @@ export function hasLoggedValue(entry?: HabitEntry) {
   return Boolean(entry && !entry.skipped && entry.hasValue !== false && Number.isFinite(entry.value));
 }
 
+/** A day row worth listing: a real log, a skip, or a note. An undone check is none of these. */
+export function hasVisibleEntry(entry?: HabitEntry) {
+  if (!entry) return false;
+  if (entry.skipped || Boolean(entry.note?.trim())) return true;
+  return hasLoggedValue(entry);
+}
+
 export function isHabitActiveOn(habit: Habit, date: Date) {
   const key = toDateKey(date);
   if (key < habit.startDate) return false;
@@ -106,11 +113,11 @@ export function getHabitPeriodProgress(
     .filter((date) => isHabitActiveOn(habit, date))
     .map((date) => getEntry(state, habit.id, date))
     .filter((entry): entry is HabitEntry => Boolean(entry));
-  const usable = entries.filter((entry) => !entry.skipped && entry.hasValue !== false);
+  // A daily skip drops that day from the total. A weekly or monthly skip does
+  // not waive the period, so a logged amount on that day still counts.
+  const usable = entries.filter((entry) => entry.hasValue !== false && !(habit.period === 'day' && entry.skipped));
   const value = usable.reduce((sum, entry) => sum + Math.max(0, entry.value || 0), 0);
   const hasEntry = usable.length > 0;
-  // A per-day skip exempts a daily goal. It cannot silently waive an entire
-  // flexible week or month; those periods need an explicit period-level mode.
   const skipped = habit.period === 'day' && entries.some((entry) => entry.skipped) && usable.length === 0;
   // A check can be logged once per active day. Cap the period target at the
   // days this habit can actually occur, so "31" still finishes in a short
@@ -159,7 +166,7 @@ export function getHabitDayAttention(habit: Habit, date: Date, state: TrackerSta
   const entry = getEntry(state, habit.id, date);
   if (entry?.skipped) return 'satisfied';
   if (habit.metric === 'check' && habit.period === 'day') {
-    return entry && entry.value > 0 ? 'satisfied' : 'open';
+    return entry && entry.hasValue !== false && entry.value > 0 ? 'satisfied' : 'open';
   }
 
   const progress = getHabitPeriodProgress(habit, date, state);
@@ -194,6 +201,49 @@ export function describeHabitHeatCell(habit: Habit, date: Date, state: TrackerSt
     ratio: getDayContributionRatio(habit, date, state) ?? 0,
     off: false,
     skipped: false,
+  };
+}
+
+export interface WeekDayMark {
+  ratio: number | null;
+  done: boolean;
+  skipped: boolean;
+  label: string;
+}
+
+/**
+ * Week-grid mark for one habit on one day. A non-daily stay-under goal shares
+ * one period ratio, so a check is reserved for a day that logged toward a
+ * finished period. Untouched days are not "100 percent".
+ */
+export function describeWeekDayCell(habit: Habit, day: Date, state: TrackerState): WeekDayMark {
+  const ratio = getDayContributionRatio(habit, day, state);
+  const entry = getEntry(state, habit.id, day);
+  const when = day.toLocaleDateString('en-US');
+  if (ratio === null && !entry?.skipped) {
+    return { ratio, done: false, skipped: false, label: `${habit.name} is off schedule on ${when}` };
+  }
+  if (entry?.skipped) {
+    return { ratio, done: false, skipped: true, label: `${habit.name} was skipped on ${when}` };
+  }
+  if (habit.direction === 'atMost' && habit.period !== 'day') {
+    const progress = getHabitPeriodProgress(habit, day, state);
+    const logged = Boolean(entry && entry.hasValue !== false);
+    const within = progress.value <= progress.target;
+    return {
+      ratio,
+      done: progress.complete && logged,
+      skipped: false,
+      label: logged
+        ? `${habit.name} on ${when}, ${within ? 'within' : 'over'} the ${habit.period} limit`
+        : `${habit.name} has no entry on ${when}`,
+    };
+  }
+  return {
+    ratio,
+    done: Boolean(ratio && ratio >= 1),
+    skipped: false,
+    label: `${habit.name}, ${Math.round((ratio ?? 0) * 100)} percent on ${when}`,
   };
 }
 

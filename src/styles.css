@@ -507,7 +507,7 @@ main {
 .view-header-sub {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.04em;
 }
 
@@ -726,7 +726,7 @@ main {
   max-width: 80%;
   margin: 11px 0 0;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -918,8 +918,8 @@ main {
 .week-strip-day span {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 7px;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -1568,9 +1568,9 @@ main {
 }
 
 .matrix-day-score {
-  min-height: 9px;
-  font-size: 7px;
-  letter-spacing: 0.04em;
+  min-height: 14px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 .matrix-day.is-today {
@@ -1718,7 +1718,7 @@ main {
 .matrix-progress strong {
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 8px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1726,7 +1726,7 @@ main {
 .matrix-progress small {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .week-recap {
@@ -1809,8 +1809,8 @@ main {
   border-right: 1px solid var(--line);
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.04em;
   text-align: center;
   text-transform: uppercase;
 }
@@ -1902,8 +1902,8 @@ main {
 .month-day-score {
   color: inherit;
   font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .month-day-dots {
@@ -2181,7 +2181,7 @@ main {
   align-items: center;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -2202,7 +2202,7 @@ main {
   overflow: visible;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 7px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -2270,27 +2270,45 @@ main {
 
 .heatmap-month-wall {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
+  min-width: 0;
   padding: 18px 14px 15px;
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 .heatmap-month-row {
   display: grid;
-  grid-template-columns: 2.5rem repeat(31, minmax(1.5rem, 1fr));
-  gap: 3px;
+  grid-template-columns: 3rem repeat(31, minmax(0, 1fr));
+  gap: 2px;
   align-items: center;
-  width: max(100%, calc(2.5rem + 31 * 1.5rem + 30 * 3px));
+  width: 100%;
+  min-width: 0;
 }
 
 .heatmap-month-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 7px;
-  letter-spacing: 0.02em;
+  font-size: 11px;
+  letter-spacing: 0;
   text-transform: uppercase;
   white-space: nowrap;
+  background: var(--surface);
+}
+
+.heatmap-month-wall .heat-cell,
+.heatmap-month-wall .heat-void {
+  min-width: 0;
+  min-height: 0;
+}
+
+.heatmap-month-wall .heat-cell:hover:not(:disabled),
+.heatmap-month-wall .heat-cell:focus-visible {
+  transform: none;
 }
 
 .heatmap-month-wall .heat-cell {
@@ -2333,7 +2351,7 @@ main {
 
 .heatmap-caption p {
   margin: 0;
-  font-size: 8px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -2997,8 +3015,8 @@ main {
 }
 
 .library-actions button {
-  width: 35px;
-  height: 35px;
+  width: 44px;
+  height: 44px;
   border-radius: 9px;
 }
 
@@ -3634,9 +3652,10 @@ main {
     min-height: 49px;
     border-radius: 12px;
     color: var(--text-muted);
-    font-size: 7px;
+    font-size: 11px;
     font-weight: 750;
     text-decoration: none;
+    white-space: nowrap;
   }
 
   .mobile-nav a.active {
@@ -3700,7 +3719,7 @@ main {
   }
 
   .matrix-day-score {
-    font-size: 6.5px;
+    font-size: 11px;
   }
 
   .matrix-row-contents {
@@ -3940,8 +3959,8 @@ main {
 
   .month-week-labels span {
     padding: 10px 2px;
-    font-size: 7px;
-    letter-spacing: 0.02em;
+    font-size: 11px;
+    letter-spacing: 0;
   }
 
   .month-day {
@@ -3954,7 +3973,7 @@ main {
   }
 
   .month-day-score {
-    font-size: 6.5px;
+    font-size: 11px;
     letter-spacing: 0;
   }
 
@@ -4093,7 +4112,7 @@ main {
 
   .library-actions button {
     width: 100%;
-    height: 40px;
+    height: 44px;
   }
 
   .dialog-backdrop {
@@ -4102,12 +4121,18 @@ main {
 
   .habit-dialog {
     min-height: 100vh;
+    min-height: 100dvh;
+    box-sizing: border-box;
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
     border: 0;
     border-radius: 0;
   }
 
   .habit-dialog > header {
     top: 0;
+    padding-top: calc(21px + env(safe-area-inset-top));
     border-radius: 0;
   }
 
@@ -4134,8 +4159,10 @@ main {
   }
 
   .storage-warning button {
-    width: 100%;
-    margin-left: 26px;
+    flex: 1 0 100%;
+    width: auto;
+    margin-left: 0;
+    padding-left: 26px;
     text-align: left;
   }
 
@@ -4171,7 +4198,7 @@ main {
 
   .metric-card p {
     max-width: 95%;
-    font-size: 8px;
+    font-size: 12px;
   }
 
   .habit-badge {
@@ -4233,7 +4260,9 @@ main {
   .mobile-nav,
   .app-footer,
   .header-tools,
-  button {
+  .date-switcher,
+  .dialog-backdrop,
+  .storage-warning {
     display: none !important;
   }
 

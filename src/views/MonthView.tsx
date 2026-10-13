@@ -15,6 +15,7 @@ import {
   getEntry,
   getHabitPeriodProgress,
   getIntensityLevel,
+  hasVisibleEntry,
   isHabitActiveOn,
   isHabitScheduledOn,
 } from '../metrics';
@@ -121,7 +122,7 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
               const future = isAfterDate(day, new Date());
               const snapshot = getDaySnapshot(state, day, visibleHabits);
               const level = future || snapshot.scheduled === 0 ? 0 : getIntensityLevel(snapshot.score);
-              const loggedHabits = visibleHabits.filter((habit) => Boolean(getEntry(state, habit.id, day))).slice(0, 4);
+              const loggedHabits = visibleHabits.filter((habit) => hasVisibleEntry(getEntry(state, habit.id, day))).slice(0, 4);
               const label = future
                 ? `${day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}, upcoming`
                 : `${day.toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}: ${snapshot.logged} logs, ${snapshot.scheduled ? `${Math.round(snapshot.score * 100)} percent day score` : 'rest day'}`;
@@ -152,7 +153,9 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
               <Layers3 aria-hidden="true" />
             </div>
             <div className="category-list">
-              {categoryRows.map((row) => (
+              {categoryRows.length === 0 ? (
+                <p className="no-day-entries">No habits in this month.</p>
+              ) : categoryRows.map((row) => (
                 <div className="category-row" key={row.category}>
                   <div><span><i style={{ background: row.color }} />{row.category}</span><strong>{Math.round(row.value * 100)}%</strong></div>
                   <ProgressBar value={row.value} color={row.color} label={`${row.category} monthly balance`} />
@@ -170,7 +173,9 @@ export function MonthView({ state, habits, date, setDate, openDay }: MonthViewPr
           <div><span>Goal review</span><h2>Habit by habit</h2></div>
         </div>
         <div className="habit-month-list">
-          {visibleHabits.map((habit) => {
+          {visibleHabits.length === 0 ? (
+            <p className="no-day-entries">No habits in this month.</p>
+          ) : visibleHabits.map((habit) => {
             const result = getMonthHabitResult(habit, actualDays, state);
             return (
               <article key={habit.id} style={habitStyle(habit)}>

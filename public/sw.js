@@ -1,10 +1,41 @@
 /*
  * Daymark offline shell.
  * Navigations stay network-first so a new deploy is picked up immediately;
- * the cached shell only serves when the network is unreachable. Hashed build
- * assets are immutable, so they are safe to serve cache-first forever.
+ * the cached shell only serves when the network is unreachable. Failed
+ * navigations are not stored. Hashed build assets stay cache-first, and a
+ * successful navigation drops hashes the new shell no longer references.
  */
-const CACHE = 'daymark-shell-v1';
+const CACHE = 'daymark-shell-v2';
+
+function rememberNavigation(response) {
+  if (!response.ok || response.type !== 'basic') return Promise.resolve();
+  // Clone before the page reads the original body.
+  const shell = response.clone();
+  const htmlCopy = response.clone();
+  return caches.open(CACHE).then(async (cache) => {
+    await cache.put('./', shell);
+    let html = '';
+    try {
+      html = await htmlCopy.text();
+    } catch {
+      return;
+    }
+    const referenced = new Set();
+    const pattern = /(?:\/daymark\/|\.\/)assets\/[^"'()\s]+/g;
+    for (const match of html.matchAll(pattern)) {
+      const path = match[0].startsWith('.') ? `/daymark${match[0].slice(1)}` : match[0];
+      referenced.add(path);
+    }
+    if (!referenced.size) return;
+    const keys = await cache.keys();
+    await Promise.all(keys.map((request) => {
+      const path = new URL(request.url).pathname;
+      if (!path.includes('/daymark/assets/')) return undefined;
+      if (referenced.has(path)) return undefined;
+      return cache.delete(request);
+    }));
+  }).catch(() => undefined);
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -32,8 +63,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put('./', copy));
+          event.waitUntil(rememberNavigation(response));
           return response;
         })
         .catch(() => caches.match('./').then((hit) => hit ?? Response.error())),
